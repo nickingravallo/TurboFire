@@ -1,8 +1,22 @@
 default: build
 
-build:
+build: gto-solver
+
+gto-solver:
 	mkdir -p output
-	gcc -Iinclude -o output/TurboFire src/TurboFire.c src/Card.c src/Deck.c src/Game.c
+	gcc -O3 -Iinclude -lm -o output/TurboFire src/TurboFire.c src/MCCFR.c src/RangeParser.c src/GUI.c
+
+gto-solver-gui:
+	mkdir -p output
+	@if pkg-config --exists sdl2 SDL2_ttf; then \
+		gcc -O3 -Iinclude -DUSE_GUI -lm `pkg-config --cflags --libs sdl2 SDL2_ttf` -o output/TurboFire src/TurboFire.c src/MCCFR.c src/RangeParser.c src/GUI.c; \
+		echo "Built with GUI support"; \
+	else \
+		echo "SDL2 not found. Install with: sudo apt-get install libsdl2-dev libsdl2-ttf-dev (Ubuntu/Debian)"; \
+		echo "or: brew install sdl2 sdl2_ttf (macOS)"; \
+		echo "Building without GUI support..."; \
+		gcc -O3 -Iinclude -lm -o output/TurboFire src/TurboFire.c src/MCCFR.c src/RangeParser.c src/GUI.c; \
+	fi
 
 handrank-gen:
 	mkdir -p output

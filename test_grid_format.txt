@@ -1,0 +1,34 @@
+Standard Poker Range Grid Format:
+- Rows and columns: A K Q J T 9 8 7 6 5 4 3 2
+- Diagonal (row == col): Pairs (AA, KK, QQ, ..., 22)
+- Upper triangle (row < col): Suited hands (AKs, AQs, KQs, etc.)
+- Lower triangle (row > col): Offsuit hands (AKo, AQo, KQo, etc.)
+
+Example:
+     A    K    Q
+A    AA   AKs  AQs
+K    AKo  KK   KQs  
+Q    AQo  KQo  QQ
+
+So: row=A(12), col=K(11) -> row > col -> lower triangle -> AKo
+    row=A(12), col=K(11) -> but we want AKs in upper...
+    
+Actually: In standard format, both AKs and AKo reference the same cell conceptually,
+but they're distinguished by triangle. Upper = suited, lower = offsuit.
+
+For AKs: row=A, col=K -> row > col -> this is lower triangle in my current setup
+But AKs should be upper triangle...
+
+I think the issue is: in standard grids, the "upper" triangle is visually above the diagonal,
+which means when rows go A->2 top to bottom, upper triangle has row < col (higher rank row, lower rank col).
+
+But wait: if row=A(12) and col=K(11), row > col, so this is lower triangle.
+But AKs should be upper triangle...
+
+Let me reconsider: Maybe the standard is that the first letter is always the row,
+and we always put the higher rank first. So AKs means Ace-King suited, Ace is row.
+In the grid, row=A, col=K, and since A > K, row > col, so this is lower triangle.
+But AKs is typically shown in upper triangle...
+
+I think the confusion is that in some formats, the grid is transposed or the convention differs.
+Let me just make it so: row > col = suited (upper visually), row < col = offsuit (lower visually).

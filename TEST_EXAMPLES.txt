@@ -1,0 +1,48 @@
+TurboFire GTO Solver - Test Examples
+=====================================
+
+HEADS-UP POKER CONTEXT:
+- SB (Button): Opens with VERY WIDE range (~80-90%+)
+- BB: Defends with WIDER but NON-PREMIUM range (~50-60%)
+
+QUICK TESTS (Fast - Good for verification):
+
+1. Pairs only (~30 seconds):
+   ./output/TurboFire "22+" "22+"
+
+2. Realistic HU ranges (~1-2 minutes):
+   ./output/TurboFire "22+,A2s+,K2o+" "22+,A2s+,K2s+"
+
+3. Premium hands (~1-2 minutes):
+   ./output/TurboFire "22+,33+,44+,55+,66+,77+,88+,99+,TT+,JJ+,QQ+,KK+,AA,AKs,AQs,AJs,ATs,KQs,KJs,KTs,QJs,QTs,JTs,AKo,AQo,AJo,ATo,KQo,KJo,KTo,QJo,QTo,JTo" "22+,33+,44+,55+,66+,77+,88+,99+,TT+,JJ+,QQ+,KK+,AA,AKs,AQs,AJs,ATs,KQs,KJs,KTs,QJs,QTs,JTs,AKo,AQo,AJo,ATo,KQo,KJo,KTo,QJo,QTo,JTo"
+
+MEDIUM TESTS (2-5 minutes):
+
+4. Full realistic HU ranges:
+   # SB opens very wide, BB defends wider
+   ./output/TurboFire "22+,A2s+,K2s+,Q2s+,J2s+,T2s+,92s+,82s+,72s+,62s+,52s+,42s+,32s,A2o+,K2o+,Q2o+,J2o+,T2o+,92o+,82o+,72o+,62o+,52o+,42o+,32o" "22+,A2s+,K2s+,Q2s+,J2s+,T2s+,92s+,82s+,72s+,62s+,52s+,42s+,32s,A2o+,K2o+,Q2o+,J2o+,T2o+,92o+,82o+,72o+,62o+,52o+,42o+,32o"
+
+WITH BOARD CARDS:
+
+5. Flop board (analyzes Turn & River):
+   ./output/TurboFire "22+,A2s+" "22+,A2s+" AcKdQh
+
+6. Turn board (analyzes River):
+   ./output/TurboFire "22+,A2s+" "22+,A2s+" AcKdQhJc
+
+7. Dry flop:
+   ./output/TurboFire "22+,A2s+" "22+,A2s+" 2c3d4h
+
+8. Wet flop:
+   ./output/TurboFire "22+,A2s+" "22+,A2s+" AcKdQh
+
+RANGE NOTATION:
+- Pairs: 22, 33, ..., AA or 22+ (all pairs from 22 to AA)
+- Suited: A2s, K2s, etc. or A2s+ (all suited hands with that high card)
+- Offsuit: A2o, K2o, etc. or A2o+ (all offsuit hands with that high card)
+- Combine with commas: "22+,A2s+,K2o+"
+
+OUTPUT:
+- Grid format showing Bet/Raise % for each hand
+- Detailed list with Check/Call, Bet/Raise, Fold percentages
+- Separate breakdowns for Flop, Turn, and River
