@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#define FLUSH_MAP_SIZE    0x2000
+#define  RANK_MAP_SIZE    0x10000
+
 #define OMPEVAL_MAGIC        0xE91AAA35U
 
 #define HIGH_CARD_FLOOR      1     // + 1277 | (13 choose 5) - 10 straights

@@ -7,9 +7,6 @@ extern uint16_t rank_map[];
 #define FLUSH_TOTAL_COUNT 7099
 #define  RANK_TOTAL_COUNT 49205
 
-#define FLUSH_MAP_SIZE    0x2000
-#define  RANK_MAP_SIZE    0x10000
-
 int main() {
 	int i;
 	int flush_count, rank_count;

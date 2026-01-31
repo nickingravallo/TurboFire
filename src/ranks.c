@@ -12,8 +12,8 @@
  */
 static const int SUIT_PERMUTATION[4] = { 1, 0, 3, 2 };
 
-uint16_t flush_map[0x2000];
-uint16_t rank_map[0x10000];
+uint16_t flush_map[FLUSH_MAP_SIZE];
+uint16_t    rank_map[RANK_MAP_SIZE];
 
 //fast lookup table for combinatorics for cards, 0-12
 static int nCk[13][6] = {

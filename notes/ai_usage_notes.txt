@@ -21,3 +21,7 @@ December 2025 / January 2026:
   - This time with a better structured plan in plan-2026-01-22.txt
   - Although I was able to produce a GTO solver based on the input, it really struggled in terms of functionality
   - It couldn't "understand" the goal of what I wanted and bugs were persistent if I could not handle it first time around
+
+- 2026-01-29 - 
+  - Used Gemini to help build the rank verifier
+  - Used Claude to generate the fix for non-flush ranks
