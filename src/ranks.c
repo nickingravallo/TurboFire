@@ -3,17 +3,17 @@
 
 #include "ranks.h"
 
-/* 
- * Preventing collisions for testing
- * 0 = Spades
- * 1 = Hearts
- * 2 = Diamonds
- * 3 = Clubs
+/*
+ *   0 = Spades   (bits 0–12)
+ *   1 = Hearts   (bits 16–28),
+ *   2 = Diamonds (bits 32–44) 
+ *   3 = Clubs    (bits 48–60).
  */
 static const int SUIT_PERMUTATION[4] = { 1, 0, 3, 2 };
 
 uint16_t flush_map[FLUSH_MAP_SIZE];
-uint16_t    rank_map[RANK_MAP_SIZE];
+uint16_t rank_map[RANK_MAP_SIZE];
+uint64_t rank_keys[RANK_MAP_SIZE];
 
 //fast lookup table for combinatorics for cards, 0-12
 static int nCk[13][6] = {
@@ -23,14 +23,33 @@ static int nCk[13][6] = {
 };
 
 
-uint16_t get_rank_map_index(uint64_t hand) {
+static uint16_t get_rank_hash(uint64_t hand) {
 	uint32_t folded;
-	uint16_t id;
-
+	
 	folded = (uint32_t)(hand >> 32) ^ (uint32_t)hand;
-	id     = (folded * OMPEVAL_MAGIC) >> 16;
+	return (uint16_t)((folded * (uint64_t)OMPEVAL_MAGIC) >> 16);
+}
 
-	return id;
+/* Canonicalize 7-card hand so same rank multiset always gives same 64-bit value.
+ * Extract ranks in order 0..12 (like generate_ranks_recursive) and assign suits via SUIT_PERMUTATION. */
+static uint64_t canonicalize_hand(uint64_t hand) {
+	int ranks[7], n = 0;
+	int count[13] = { 0 };
+	uint64_t out = 0;
+	int r, s, i;
+
+	for (r = 0; r < 13; r++) {
+		for (s = 0; s < 4; s++) {
+			if (((hand >> (16 * s)) & 0x1FFF) & (1U << r))
+				ranks[n++] = r;
+		}
+	}
+	for (i = 0; i < 7; i++) {
+		int rank = ranks[i];
+		int suit = SUIT_PERMUTATION[count[rank]++];
+		out |= 1ULL << (rank + 16 * suit);
+	}
+	return out;
 }
 
 uint16_t get_flush_map_index(uint64_t hand) {
@@ -56,16 +75,21 @@ uint64_t combine_hand_board(uint64_t hand, uint64_t board) {
 }
 
 int evaluate(uint64_t hand, uint64_t board) {
-	uint32_t id;
-	uint64_t combined;
+	uint64_t combined, canonical;
+	uint16_t id, flush_id;
 
 	combined = combine_hand_board(hand, board); 
 	
-	id = get_flush_map_index(combined);
-	if (id)
-		return flush_map[id];	
+	flush_id = get_flush_map_index(combined);
+	if (flush_id)
+		return flush_map[flush_id];	
 	
-	id = get_rank_map_index(combined);
+	canonical = canonicalize_hand(combined);
+	id = get_rank_hash(canonical);
+
+	while (rank_keys[id] != 0 && rank_keys[id] != canonical)
+		id = (id + 1) & RANK_MAP_MASK;
+
 	return rank_map[id];
 }
 
@@ -263,38 +287,35 @@ uint16_t calculate_rank_strength(int *ranks) {
 }
 
 void generate_ranks_recursive(int depth, int start_rank, uint64_t current_hand, int *current_ranks) {
-	uint32_t rank_id;
-	int rank, count, suit, k;
+	uint16_t id;
+	int count;
 	uint64_t new_card;
+	int rank, k;
 
-	//base case 7 cards
 	if (depth == 7) {
-		rank_id = get_rank_map_index(current_hand);
+		id = get_rank_hash(current_hand);
 
-		//check if already populated
-		if (rank_map[rank_id])
-			return;
+		while (rank_keys[id] != 0 && rank_keys[id] != current_hand)
+			id = (id + 1) & RANK_MAP_MASK;
 
-		rank_map[rank_id] = calculate_rank_strength(current_ranks);
+		if (rank_keys[id] == 0) {
+			rank_map[id] = calculate_rank_strength(current_ranks);
+			rank_keys[id] = current_hand;
+		}
 		return;
 	}
 
 	for (rank = start_rank; rank <= 12; rank++) {
 		count = 0;
-
 		for (k = 0; k < depth; k++)
 			if (current_ranks[k] == rank)
 				count++;
 
-		// we cant have five of a kind
 		if (count >= 4)
-			continue; 
+			continue;
 
 		current_ranks[depth] = rank;
-
-		suit = SUIT_PERMUTATION[count];
-		new_card = (1ULL << (rank + (16 * suit)));
-
+		new_card = (1ULL << (rank + (16 * SUIT_PERMUTATION[count])));
 		generate_ranks_recursive(depth + 1, rank, current_hand | new_card, current_ranks);
 	}
 }
@@ -304,6 +325,7 @@ void init_rank_map() {
 
 	//no zero sets in recurse, safety
 	memset(rank_map, 0, sizeof(rank_map));
+	memset(rank_keys, 0, sizeof(rank_keys));
 
 	generate_ranks_recursive(0, 0, 0, rank_storage);
 }
