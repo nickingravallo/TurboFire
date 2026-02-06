@@ -1,0 +1,139 @@
+=============================================================================
+MCCFR SOLVER PSEUDOCODE (Monte Carlo Counterfactual Regret Minimization)
+=============================================================================
+Assumes: evaluate(hand, board), hand_category(), init_rank_map(), init_flush_map()
+Hands/board: uint64_t (OMP layout; combine_hand_board(h, b) = h | b)
+=============================================================================
+
+--- INIT ---
+  init_rank_map();
+  init_flush_map();
+
+--- GAME PARAMS ---
+  Players: 2 (P0, P1). P0 = first to act on a street.
+  Streets: FLOP (3 board), TURN (+1), RIVER (+1). Advance when both check or call.
+  Pot: normalized to 1.0 for payoff (or use actual pot; payoff in "chips").
+
+--- ACTIONS (context-dependent: check-raise and reraise) ---
+  Whether a bet is "facing" the current player is determined by the last action
+  in the history on this street (e.g. last was BET or RAISE by opponent).
+
+  When NO bet is facing (e.g. start of street, or opponent just checked):
+    CHECK  — pass (if opponent then checks too, advance street or showdown).
+    BET    — put a bet in (size can be fixed, e.g. 1x pot, or abstract: "small/big").
+  So 2 actions: CHECK, BET.
+
+  When facing a bet (opponent just BET or RAISE):
+    FOLD   — forfeit the pot.
+    CALL   — match the bet (terminal for the street if no more raises allowed; else opponent can act again).
+    RAISE  — put in a larger bet (reraises if there was already a bet/raise).
+  So 3 actions: FOLD, CALL, RAISE.
+
+  Check-raise: OOP checks (CHECK) → IP bets (BET) → OOP raises (RAISE). Same action set:
+  at the node where OOP faces a bet, legal_actions = { FOLD, CALL, RAISE }.
+
+  Reraise: P0 bets (BET) → P1 raises (RAISE) → P0 faces a bet; P0 can CALL or RAISE again.
+  So legal_actions(I) depends on I: if last action was CHECK then { CHECK, BET };
+  if last action was BET or RAISE then { FOLD, CALL, RAISE }. Optionally cap raises
+  per street (e.g. max 2 raises): then after N raises, only FOLD, CALL are legal.
+  Optionally RAISE can have sizes (e.g. RAISE_SMALL, RAISE_POT) — then more actions.
+
+--- INFO SET ---
+  An info set I = (board_cards, street, player_to_act, action_history).
+  Same I for all hands that see the same board and action sequence (player
+  doesn't see opponent cards). Key for hash table: hash(board, street, player, history).
+
+--- DATA PER INFO SET I ---
+  regrets[a]   = accumulated regret for action a (real, can be negative).
+  strategy_sum[a] = sum over iterations of (reach prob * strategy[a]) for averaging.
+  Get current strategy from regrets (regret matching):
+    strategy[a] = max(0, regrets[a]) for each a;
+    normalize so sum_a strategy[a] = 1; if all regrets <= 0 use uniform 1/num_actions.
+
+--- TERMINAL NODES ---
+  1) Someone folded: payoff = +1 for non-folder, -1 for folder (from P0 view: +1 if P1 folded, -1 if P0 folded).
+  2) Showdown (all streets done, no fold): 
+       combined_p0 = combine_hand_board(hand_p0, board);
+       combined_p1 = combine_hand_board(hand_p1, board);
+       s0 = evaluate(hand_p0, board);   // strength 1..7463
+       s1 = evaluate(hand_p1, board);
+       if s0 > s1 then payoff = +1 (P0 wins); if s0 < s1 then payoff = -1; else payoff = 0.
+  (Optional: use hand_category(s0), hand_category(s1) for tie-break or logging only.)
+
+--- MCCFR (OUTCOME SAMPLING) - ONE TRAJECTORY ---
+  Sample one path from root to terminal by sampling actions according to
+  current strategy (or epsilon-greedy). Then update only the info sets
+  encountered along that path (lazy updates).
+
+  Alternatively: CFR (full tree) — traverse all actions and recurse; update
+  regrets at every node. Below is vanilla CFR; for MCCFR you sample the path.
+
+--- CFR RECURSION (vanilla, from P0 perspective) ---
+
+  function cfr(I, reach_p0, reach_p1):
+    if reach_p0 < eps or reach_p1 < eps: return 0
+
+    data = get_or_create(I)
+    data.visits += 1
+
+    if is_terminal(I):
+      return payoff_at_terminal(I)   // +1 / -1 / 0 from P0 view; use evaluate() at showdown
+
+    num_actions = legal_actions(I)   // 2 if no bet facing (CHECK, BET); 3 if facing bet (FOLD, CALL, RAISE)
+    strategy[0..num_actions-1] = regret_matching(data.regrets, num_actions)
+
+    util[a] for each action a:
+      I' = I with action a appended, player flipped (and street advanced if both checked)
+      reach_p0', reach_p1' = update reach probs: if current player is P0 then reach_p0' = reach_p0 * strategy[a], else reach_p1' = reach_p1 * strategy[a]
+      util[a] = cfr(I', reach_p0', reach_p1')
+
+    node_util = sum_a strategy[a] * util[a]
+
+    current_player = I.player   // 0 or 1
+    counterfactual_reach = (current_player == 0) ? reach_p1 : reach_p0
+    reach_acting = (current_player == 0) ? reach_p0 : reach_p1
+
+    // Regrets in acting player's perspective
+    for each action a:
+      player_util[a] = (current_player == 0) ? util[a] : -util[a]
+    player_node_util = (current_player == 0) ? node_util : -node_util
+
+    for each action a:
+      regret_a = player_util[a] - player_node_util
+      data.regrets[a] += counterfactual_reach * regret_a
+      data.strategy_sum[a] += reach_acting * strategy[a]
+
+    return node_util   // from P0 perspective
+
+--- REGRET MATCHING ---
+  function regret_matching(regrets[], n):
+    for a in 0..n-1: s[a] = max(0, regrets[a])
+    sum = sum_a s[a]
+    if sum > 0: for a: strategy[a] = s[a] / sum
+    else:       for a: strategy[a] = 1/n
+    return strategy
+
+--- IS TERMINAL ---
+  - Last action was FOLD -> terminal (non-folder wins).
+  - Last action was CALL (facing a bet) -> terminal for that street (showdown; use evaluate()).
+    So: BET→CALL, or RAISE→CALL, or (after cap) final RAISE→CALL -> showdown.
+  - Last two actions were CHECK then CHECK -> street ends; if RIVER then showdown; else advance to next street.
+  - Street advanced to next (flop->turn->river) when both check; if river and both check -> showdown.
+  - (If you cap raises) After max raises per street, only FOLD and CALL are legal; CALL ends the street.
+
+--- SOLVE LOOP ---
+  for iter = 1 to N:
+    I0 = root info set (e.g. flop, P0 to act, empty history, current board)
+    cfr(I0, 1.0, 1.0)
+
+  After N iterations: average strategy at I is strategy_sum[a] / sum_a strategy_sum[a]
+  for each info set I. That approximates Nash equilibrium strategy.
+
+--- HANDS / CARD ENCODING ---
+  When building the game tree you fix a deal (hole cards + board) or sample it.
+  For each (hand_p0, hand_p1, board) you have one game instance. Info sets
+  are per (board, street, history); payoff at showdown uses evaluate(hand_p0, board)
+  vs evaluate(hand_p1, board) as above. Hand and board are uint64_t in OMP format;
+  combine_hand_board(hand, board) = hand | board gives 7 cards for evaluate().
+
+=============================================================================

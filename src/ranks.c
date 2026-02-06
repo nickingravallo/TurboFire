@@ -30,8 +30,6 @@ static uint16_t get_rank_hash(uint64_t hand) {
 	return (uint16_t)((folded * (uint64_t)OMPEVAL_MAGIC) >> 16);
 }
 
-/* Canonicalize 7-card hand so same rank multiset always gives same 64-bit value.
- * Extract ranks in order 0..12 (like generate_ranks_recursive) and assign suits via SUIT_PERMUTATION. */
 static uint64_t canonicalize_hand(uint64_t hand) {
 	int ranks[7], n = 0;
 	int count[13] = { 0 };
@@ -295,9 +293,11 @@ void generate_ranks_recursive(int depth, int start_rank, uint64_t current_hand, 
 	if (depth == 7) {
 		id = get_rank_hash(current_hand);
 
+		//find first available slot for the rank key 
 		while (rank_keys[id] != 0 && rank_keys[id] != current_hand)
 			id = (id + 1) & RANK_MAP_MASK;
 
+		//populate 
 		if (rank_keys[id] == 0) {
 			rank_map[id] = calculate_rank_strength(current_ranks);
 			rank_keys[id] = current_hand;
