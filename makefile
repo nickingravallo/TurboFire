@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -I include
+CFLAGS = -Wall -Wextra -O2 -I src
 SRC_DIR = src
 OBJ_DIR = obj
 OUT_DIR = output
