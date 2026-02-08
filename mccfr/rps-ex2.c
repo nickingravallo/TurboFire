@@ -130,6 +130,7 @@ void train(int iterations) {
 	printf("Scissors  %.2f\n", player2_final_strategy[2]);
 }
 
-void main() {
+int main() {
 	train(100000);
+	return 0;
 }

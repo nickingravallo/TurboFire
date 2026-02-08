@@ -205,7 +205,7 @@ void train(int iterations) {
 	}
 }
 
-void main() {
+int main() {
 	int i, j;
 
 	for ( i = 0; i < NUM_NODES; i++) {
@@ -234,4 +234,5 @@ void main() {
 			printf(": [%.2f] [%.2f]\n", prob_pass, prob_bet);
 		}
 	}
+	return 0;
 }
