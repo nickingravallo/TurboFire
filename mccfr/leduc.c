@@ -7,8 +7,9 @@
 
 #define FOLD_MASK     1
 #define CHECK_MASK    2
-#define CALL_MASK     4
-#define RAISE_MASK    8
+#define CALL_MASK     2
+#define RAISE_MASK    4
+#define BET_MASK      4
 
 #define P1            0
 #define P2            1
@@ -64,7 +65,7 @@ Node* get_or_create_node(node_key_t key) {
 		if (table[hash_key].key == key)
 			return &table[hash_key].node;
 
-		h = (h + 1) % TABLE_SIZE/
+		h = (h + 1) % TABLE_SIZE
 	}
 
 	//empty slot
@@ -129,9 +130,43 @@ int get_legal_action(int last_action, int raises_occurred) {
 	return legal_action;
 }
 
+void get_strategy(float* regret, float* out_strategy) {
+	int i;
+
+	float normalized_sum;
+
+	normalized_sum = 0;
+	for ( i = 0 ; i < MAX_ACTIONS; i++) {
+		out_strategy[i]   = (regret[i] <= 0) ? 0 : regret[i];
+		normalized_sum += out_strategy[i];
+	}
+
+	if (normalized_sum > 0)
+		for ( i = 0 ; i < MAX_ACTIONS; i++ )
+			out_strategy[i] = normalized_sum / (float)MAX_ACTIONS;
+	else
+		for ( i = 0 ; i < MAX_ACTIONS; i++ )
+			out_strategy[i] = 1.0 / (float)MAX_ACTIONS;
+
+}
+
+float get_counterfactual_value(int action, int hisotry, int p1_card, int p2_card, int street, int traverser, int raises_occurred, int num_actions, int legal_actions) {
+	if (history == 0) //Game Root
+
+	else if (history == 1)
+
+	else if (history == 2)
+	return 0;
+}
+
 float mccfr(int history, int p1_card, int p2_card, int board_card, int street, int traverser, int pot, int raises_occurred, int num_actions) {
 	int legal_actions, action_player, action_card, is_traverser_turn;
+	
+	int a, max_actions;
+
 	float strategy[3];
+	float action_values[3];
+	float ev;
 
 	Node* node;
 
@@ -144,11 +179,21 @@ float mccfr(int history, int p1_card, int p2_card, int board_card, int street, i
 		active_player = P2;
 		active_card = p2_card;
 	}
+	
 	legal_actions = get_legal_actions(history, raises_occurred);
 	node = get_or_create_node(make_hash_key(history, board, active_card));
 	is_traverser_turn = (traverser == action_player);
 
-	//get_strategy(node->regret_sum, strategy);
+	get_strategy(node->regret_sum, strategy);
+
+	if ( is_traverser_turn ) {
+		max_actions = __builtin_popcount(legal_actions);
+		for ( a = 0 ; a < max_actions ; a++)
+			strategy[a] = get_counterfactual_value(a, history, p1_card, p2_card, street, traverser, raises_occurred, num_actions, legal_actions);
+	}
+	else {
+
+	}
 
 }
 
