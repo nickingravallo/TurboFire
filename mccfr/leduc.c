@@ -5,6 +5,14 @@
 #define NUM_ACTIONS 3 //fold call/check raise/bet
 #define MAX_HISTORY 100
 
+#define FOLD_MASK     1
+#define CHECK_MASK    2
+#define CALL_MASK     4
+#define RAISE_MASK    8
+
+#define P1            0
+#define P2            1
+
 #define TABLE_SIZE  1000003
 #define EMPTY_MAGIC 0xBEEFBEEF
 
@@ -103,12 +111,44 @@ int get_action(float* strategy) {
 	return MAX_ACTIONS - 1;
 }
 
-float mccfr(int history, int p1_card, int p2_card, int board_card, int street, int traverser, int pot, int bet) {
-	float strategy[3];
+// raises_occurred 0 -> check, 1 -> bet, 2 -> reraise
+int get_legal_action(int last_action, int raises_occurred) {
+	int legal_action;
 	
+	legal_action = 0;
+
+	if (last_action == 0) //game root
+		legal_action |= ( CHECK_MASK | CALL_MASK | RAISE_MASK);
+	else if (last_action == 1) //check
+		legal_action |= (CHECK_MASK | RAISE_MASK             );
+	else if (last_action == 2 && raises_occurred == 1)
+		legal_action |= (FOLD_MASK | CALL_MASK | RAISE_MASK  );
+	else if (last_action == 2 && raises_occurred == 2)
+		legal_action |= (FOLD_MASK  | CALL_MASK              );
+
+	return legal_action;
+}
+
+float mccfr(int history, int p1_card, int p2_card, int board_card, int street, int traverser, int pot, int raises_occurred, int num_actions) {
+	int legal_actions, action_player, action_card, is_traverser_turn;
+	float strategy[3];
+
 	Node* node;
 
-	node = get_or_create_node(make_hash_key(history, 
+	// Even (0, 2, 4) -> P1. Odd (1, 3) -> P2
+	if ( num_actions % 2 == 0) {
+		active_player = P1;
+		active_card = p1_card;
+	}
+	else {
+		active_player = P2;
+		active_card = p2_card;
+	}
+	legal_actions = get_legal_actions(history, raises_occurred);
+	node = get_or_create_node(make_hash_key(history, board, active_card));
+	is_traverser_turn = (traverser == action_player);
+
+	//get_strategy(node->regret_sum, strategy);
 
 }
 
