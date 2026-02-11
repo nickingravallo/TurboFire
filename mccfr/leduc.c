@@ -150,23 +150,23 @@ void get_strategy(float* regret, float* out_strategy) {
 
 }
 
-float get_counterfactual_value(int action, int history, int p1_card, int p2_card, int street, int traverser, int raises_occurred, int num_actions, int legal_actions) {
+float get_counterfactual_value(int action, int history, int last_legal_action, int p1_card, int p2_card, int street, int traverser, int raises_occurred, int num_actions, int legal_actions) {
 	if (history == 0) {      // Game Root
 		if (action == CHECK_MASK)
 			return //mccfr()
 		if (action == BET_MASK)
 			return //mccfr()
 	}
-	else if (history == 1) { // P2 Action
-		if (action == CHECK_MASK)
+	else if (history == 1) { // P1 Action
+		if (last_legal_action  == CHECK_MASK && action == CHECK_MASK)
 			return //go to next street
-		if (action == CALL_MASK)
+		if ((last_legal_action == CHECK_MASK || last_legal_action == BET_MASK) && action == CALL_MASK)
 			return // go to next street
-		if (action == RAISE_MASK)
+		if (last_legal_action  == BET_MASK   && action == RAISE_MASK)
 			return //go back to p1
 	}
-	else if (history == 2) { // P1 Action
-		if (action == CALL_MASK)
+	else if (history == 2) { // P2 Action
+		if (last_legal_action == action == CALL_MASK)
 			return //go to next street
 		if (action == FOLD_MASK)
 			return //showdown
@@ -174,12 +174,12 @@ float get_counterfactual_value(int action, int history, int p1_card, int p2_card
 			return 
 	}
 	else if (history == 3) { // P2 Action
-
+		
 	}
 	return 0;
 }
 
-float mccfr(int history, int p1_card, int p2_card, int board_card, int street, int traverser, int pot, int raises_occurred, int num_actions) {
+float mccfr(int history, int p1_card, int p2_card, int board_card, int street, int traverser, int pot, int raises_occurred, int last_legal_action, int num_actions) {
 	int legal_actions, action_player, action_card, is_traverser_turn;
 	
 	int a;
