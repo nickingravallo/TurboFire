@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define NUM_CARDS   3 //2 private 1 public
-#define NUM_ACTIONS 3 //fold call/check raise/bet
-#define MAX_HISTORY 100
+#define NUM_CARDS     3 //2 private 1 public
+#define NUM_ACTIONS   3 //fold call/check raise/bet
+#define MAX_HISTORY   100
 
 #define FOLD_MASK     1
 #define CHECK_MASK    2
@@ -150,19 +150,39 @@ void get_strategy(float* regret, float* out_strategy) {
 
 }
 
-float get_counterfactual_value(int action, int hisotry, int p1_card, int p2_card, int street, int traverser, int raises_occurred, int num_actions, int legal_actions) {
-	if (history == 0) //Game Root
+float get_counterfactual_value(int action, int history, int p1_card, int p2_card, int street, int traverser, int raises_occurred, int num_actions, int legal_actions) {
+	if (history == 0) {      // Game Root
+		if (action == CHECK_MASK)
+			return //mccfr()
+		if (action == BET_MASK)
+			return //mccfr()
+	}
+	else if (history == 1) { // P2 Action
+		if (action == CHECK_MASK)
+			return //go to next street
+		if (action == CALL_MASK)
+			return // go to next street
+		if (action == RAISE_MASK)
+			return //go back to p1
+	}
+	else if (history == 2) { // P1 Action
+		if (action == CALL_MASK)
+			return //go to next street
+		if (action == FOLD_MASK)
+			return //showdown
+		if (action == RAISE_MASK)
+			return 
+	}
+	else if (history == 3) { // P2 Action
 
-	else if (history == 1)
-
-	else if (history == 2)
+	}
 	return 0;
 }
 
 float mccfr(int history, int p1_card, int p2_card, int board_card, int street, int traverser, int pot, int raises_occurred, int num_actions) {
 	int legal_actions, action_player, action_card, is_traverser_turn;
 	
-	int a, max_actions;
+	int a;
 
 	float strategy[3];
 	float action_values[3];
@@ -187,9 +207,8 @@ float mccfr(int history, int p1_card, int p2_card, int board_card, int street, i
 	get_strategy(node->regret_sum, strategy);
 
 	if ( is_traverser_turn ) {
-		max_actions = __builtin_popcount(legal_actions);
-		for ( a = 0 ; a < max_actions ; a++)
-			strategy[a] = get_counterfactual_value(a, history, p1_card, p2_card, street, traverser, raises_occurred, num_actions, legal_actions);
+		for ( a = 0 ; a < MAX_ACTIONS ; a++)
+			strategy[a] = get_counterfactual_value((((legal_actions) >> a) & 1), history, p1_card, p2_card, street, traverser, raises_occurred, num_actions, legal_actions);
 	}
 	else {
 
