@@ -19,12 +19,18 @@ typedef enum { false, true } bool;
 #define EMPTY_MAGIC   0xBEEFBEEF
 
 typedef struct {
-	int p1_card;
-	int p2_card;
-	int board_card;
-	int street;
-	int pot;
-	uint64_t bet_history;
+	int8_t bet_history;
+	int8_t pot;
+
+	int8_t p1_card;
+	int8_t p2_card;
+	int8_t board_card;
+
+	int8_t street;
+	int8_t active_player;
+	int8_t num_actions_this_street;
+	int8_t num_raises_this_street;
+	int8_t last_action;
 } GameState;
 
 typedef struct {
@@ -83,4 +89,55 @@ Node* get_or_create_node(uint64_t key) {
 bool is_terminal(GameState* gameState);
 float get_payout(GameState* state, int traverser);
 float mccfr(GameState* gameState, int traverser);
+
+bool is_terminal(GameState* gameState) {
+	if (state->last_action == FOLD_MASK)
+		return true;
+
+	if (state=>street == 1) {
+		if (state->last_action == CALL_MASK)
+			return true;
+		if (state->last_action == CHECK_MASK && state->num_actions_this_street >= 2)
+			return true;
+	}
+}
+
+float get_payout(GameState* s, int traverser) {
+	int opponent;
+	int who_folded;
+
+	int traverser_card, opponent_card;
+	bool traverser_paired, opponent_card;
+
+	if (s->last_action == FOLD_MASK) {
+		who_folded = s->active_player;
+		if (traverser == who_folded)
+			return -(s->pot / 2.0f);
+		else
+			return  (s->pot / 2.0f);
+	}
+
+	opponent = 1 - traverser;
+	traverser_card = (traverser == P1) ? s->p1_card : s->p2_card;
+	opponent_card  = (opponent == P1)  ? s->p1_card : s->p2_card;
+
+	traverser_paried = (traverser == s->board_card);
+	opponent_paired  = (opponent_card == s->board_card);
+
+	if (traverser_paired && !opponent_paired)
+		return (state->pot / 2.0f);
+	if (!traverser_paired && opponent_paired)
+		return -(state->pot / 2.0f);
+
+	if (traverser_card > opponent_card) 
+		return (state->pot / 2.0f);
+	if (traverser_card < opponent_card) 
+		return -(state->pot / 2.0f);
+
+	return 0.0f; //chop
+}
+
+int main() {
+	return 0;
+}
 
