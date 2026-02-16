@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define NUM_CARDS     3 //2 private 1 public
 #define MAX_ACTIONS   3 //fold call/check raise/bet
@@ -94,6 +95,117 @@ InfoSet* get_or_create_node(uint64_t key) {
 		table[hash_key].infoSet.strategy_sum[i] = 0;
 	}
 	return &table[hash_key].infoSet;
+}
+
+static const char* rank_name(int rank) {
+	static const char* names[] = { "J", "Q", "K" };
+	return (rank >= 0 && rank < 3) ? names[rank] : "?";
+}
+
+static void history_to_string(uint64_t history, char* buf, size_t cap) {
+	const char action_char[] = { '?', 'F', 'C', '?', 'R' }; /* 1=Fold, 2=Check/Call, 4=Raise */
+	size_t len = 0;
+	int shift = 0;
+	buf[0] = '\0';
+	while (len + 2 < cap && shift < 63) {
+		uint64_t a = (history >> shift) & 7U;
+		if (a == 0) break;
+		char c = (a <= 4) ? action_char[a] : '?';
+		buf[len++] = c;
+		buf[len] = '\0';
+		shift += 3;
+	}
+}
+
+static void get_average_strategy(const InfoSet* node, float* out_probs) {
+	float sum = 0;
+	for (int a = 0; a < MAX_ACTIONS; a++) {
+		float s = node->strategy_sum[a];
+		out_probs[a] = (s > 0) ? s : 0;
+		sum += out_probs[a];
+	}
+	if (sum > 0)
+		for (int a = 0; a < MAX_ACTIONS; a++)
+			out_probs[a] /= sum;
+	else
+		for (int a = 0; a < MAX_ACTIONS; a++)
+			out_probs[a] = 1.0f / MAX_ACTIONS;
+}
+
+typedef struct {
+	uint64_t key;
+	InfoSet infoSet;
+} TableEntry;
+
+static int compare_entries(const void* a, const void* b) {
+	uint64_t ka = ((const TableEntry*)a)->key;
+	uint64_t kb = ((const TableEntry*)b)->key;
+	uint8_t board_a = (ka >> 8) & 0xFF;
+	uint8_t board_b = (kb >> 8) & 0xFF;
+	if (board_a != board_b) return (board_a == 0xFF) ? -1 : (board_b == 0xFF ? 1 : (int)board_a - (int)board_b);
+	if (ka != kb) return (ka < kb) ? -1 : 1;
+	return 0;
+}
+
+void print_gto_strategy(void) {
+	TableEntry* entries = (TableEntry*)malloc((size_t)TABLE_SIZE * sizeof(TableEntry));
+	int n = 0;
+	for (int i = 0; i < TABLE_SIZE; i++) {
+		if (table[i].key != EMPTY_MAGIC) {
+			entries[n].key = table[i].key;
+			entries[n].infoSet = table[i].infoSet;
+			n++;
+		}
+	}
+	qsort(entries, (size_t)n, sizeof(TableEntry), compare_entries);
+
+	printf("\n");
+	printf("  ═══════════════════════════════════════════════════════════════════════════════════════════════\n");
+	printf("  GTO Strategy (average strategy from MCCFR)\n");
+	printf("  ═══════════════════════════════════════════════════════════════════════════════════════════════\n\n");
+
+	const char* street_label[] = { "Preflop", "Flop" };
+	char hist_buf[64];
+
+	printf("  %-8s %-5s %-5s %-12s %8s %8s %8s\n",
+		"Street", "Card", "Board", "History", "Fold %", "Call %", "Raise %");
+	printf("  ─────────────────────────────────────────────────────────────────────────────────────────────\n");
+
+	for (int i = 0; i < n; i++) {
+		uint64_t key = entries[i].key;
+		uint8_t private_card = key & 0xFF;
+		uint8_t board_byte = (key >> 8) & 0xFF;
+		uint64_t hist = key >> 16;
+
+		int street = (board_byte == 0xFF) ? 0 : 1;
+		int board_card = (street == 0) ? -1 : (int)board_byte;
+		int rank = GET_RANK(private_card);
+
+		if (street == 0)
+			(void)strcpy(hist_buf, "-");
+		else {
+			history_to_string(hist, hist_buf, sizeof(hist_buf));
+			if (hist_buf[0] == '\0') (void)strcpy(hist_buf, "(start)");
+		}
+
+		float probs[MAX_ACTIONS];
+		get_average_strategy(&entries[i].infoSet, probs);
+
+		printf("  %-8s %-5s %-5s %-12s %7.1f%% %7.1f%% %7.1f%%\n",
+			street_label[street],
+			rank_name(rank),
+			street == 0 ? "-" : rank_name(GET_RANK(board_card)),
+			hist_buf,
+			(double)(probs[0] * 100.0f),
+			(double)(probs[1] * 100.0f),
+			(double)(probs[2] * 100.0f));
+	}
+
+	printf("  ═══════════════════════════════════════════════════════════════════════════════════════════════\n");
+	printf("  Legend: F=Fold  C=Check/Call  R=Raise/Bet\n");
+	printf("  ═══════════════════════════════════════════════════════════════════════════════════════════════\n\n");
+
+	free(entries);
 }
 
 bool is_terminal(GameState* state) {
@@ -208,20 +320,28 @@ GameState apply_action(GameState state, int action_id) {
 
 			call_amount = (state.street == 0) ? 2 : 4;
 			state.pot += call_amount;
-			
-			state.street++;
-			state.num_actions_this_street = 0;
-			state.num_raises_this_street  = 0;
-			state.active_player = P1;
-			state.last_action = 0;
-		}
-		else { //check
-			if (state.num_actions_this_street == 2) {
+
+			// Only advance street when calling on preflop (street 0). Calling on flop (street 1) ends the hand.
+			if (state.street == 0) {
 				state.street++;
 				state.num_actions_this_street = 0;
 				state.num_raises_this_street  = 0;
 				state.active_player = P1;
 				state.last_action = 0;
+			}
+			// else: street stays 1, last_action remains CALL_MASK -> is_terminal will end the hand
+		}
+		else { //check
+			if (state.num_actions_this_street == 2) {
+				// Only advance street when both checked on preflop. Check-check on flop ends the hand.
+				if (state.street == 0) {
+					state.street++;
+					state.num_actions_this_street = 0;
+					state.num_raises_this_street  = 0;
+					state.active_player = P1;
+					state.last_action = 0;
+				}
+				// else: street stays 1, last_action remains CHECK_MASK -> is_terminal will end the hand
 			}
 			else { //check->check
 				state.active_player = 1 - state.active_player;
@@ -354,6 +474,6 @@ int main() {
 
         if (i % 100000 == 0) printf("Iteration %d...\n", i);
     }
-    // Now you can print the strategy_sum from the hash table
+    print_gto_strategy();
     return 0;
 }
