@@ -1,7 +1,9 @@
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 #define NUM_CARDS     3 //2 private 1 public
-#define NUM_ACTIONS   3 //fold call/check raise/bet
+#define MAX_ACTIONS   3 //fold call/check raise/bet
 #define MAX_HISTORY   100
 
 #define FOLD_MASK     1
@@ -22,17 +24,18 @@ typedef enum { false, true } bool;
 #define EMPTY_MAGIC   0xBEEFBEEF
 
 typedef struct {
-	uint8_t bet_history;
+	uint64_t history;
 	uint8_t pot;
 
 	uint8_t p1_card;
 	uint8_t p2_card;
-	uint8_t board_card;
+	int8_t board_card;
 
 	uint8_t street;
 	uint8_t active_player;
 	uint8_t num_actions_this_street;
 	uint8_t num_raises_this_street;
+	uint8_t num_actions_total;
 	uint8_t last_action;
 } GameState;
 
@@ -47,10 +50,10 @@ typedef struct {
 	InfoSet infoSet;
 } HashTable;
 
-HashTable infoSetTable[TABLE_SIZE];
+HashTable table[TABLE_SIZE];
 
 void init_table() {
-	for ( int i < 0; i < TABLE_SIZE; i++)
+	for ( int i = 0; i < TABLE_SIZE; i++)
 		table[i].key = EMPTY_MAGIC;
 }
 
@@ -62,7 +65,7 @@ uint64_t hash(uint64_t key) {
 	return key % TABLE_SIZE;
 }
 
-uint64_t make_hash_key(int history, int board, int private_card) {
+uint64_t make_hash_key(uint64_t history, int board, int private_card) {
 	uint64_t key = 0;
 
 	key |= (uint64_t)private_card;
@@ -79,58 +82,58 @@ InfoSet* get_or_create_node(uint64_t key) {
 	hash_key = hash(key) % TABLE_SIZE;
 	while (table[hash_key].key != EMPTY_MAGIC) {
 		if (table[hash_key].key == key)
-			return &table[hash_key].node;
+			return &table[hash_key].infoSet;
 
-		h = (h + 1) % TABLE_SIZE
+		hash_key = (hash_key + 1) % TABLE_SIZE;
 	}
 
 	//empty slot
 	table[hash_key].key = key;
-	return &table[hash_key].node;
+	for (i = 0; i < MAX_ACTIONS; i++) {
+		table[hash_key].infoSet.regret_sum[i] = 0;
+		table[hash_key].infoSet.strategy_sum[i] = 0;
+	}
+	return &table[hash_key].infoSet;
 }
 
-bool is_terminal(GameState* gameState) {
+bool is_terminal(GameState* state) {
 	if (state->last_action == FOLD_MASK)
 		return true;
 
-	if (state=>street == 1) {
+	if (state->street == 1) {
 		if (state->last_action == CALL_MASK)
 			return true;
 		if (state->last_action == CHECK_MASK && state->num_actions_this_street >= 2)
 			return true;
 	}
+
+	return false;
 }
 
-float get_payout(GameState* s, int traverser) {
+float get_payout(GameState* state, int traverser) {
 	int opponent;
-	int who_folded;
 
 	int traverser_card, opponent_card;
-	bool traverser_paired, opponent_card;
+	bool traverser_paired, opponent_paired;
 
-	if (s->last_action == FOLD_MASK) {
-		who_folded = s->active_player;
-		if (traverser == who_folded)
-			return -(s->pot / 2.0f);
-		else
-			return  (s->pot / 2.0f);
-	}
+	if (state->last_action == FOLD_MASK)
+		return (state->active_player == traverser) ? -(state->pot / 2.0f) : (state->pot / 2.0f);
 
 	opponent = 1 - traverser;
-	traverser_card = (traverser == P1) ? s->p1_card : s->p2_card;
-	opponent_card  = (opponent == P1)  ? s->p1_card : s->p2_card;
+	traverser_card = (traverser == P1) ? state->p1_card : state->p2_card;
+	opponent_card  = (opponent == P1)  ? state->p1_card : state->p2_card;
 
-	traverser_paried = (traverser == s->board_card);
-	opponent_paired  = (opponent_card == s->board_card);
+	traverser_paired = (GET_RANK(traverser_card) == GET_RANK(state->board_card));
+	opponent_paired  = (GET_RANK(opponent_card) == GET_RANK(state->board_card));
 
 	if (traverser_paired && !opponent_paired)
 		return (state->pot / 2.0f);
 	if (!traverser_paired && opponent_paired)
 		return -(state->pot / 2.0f);
 
-	if (traverser_card > opponent_card) 
+	if (GET_RANK(traverser_card) > GET_RANK(opponent_card))
 		return (state->pot / 2.0f);
-	if (traverser_card < opponent_card) 
+	if (GET_RANK(traverser_card) < GET_RANK(opponent_card)) 
 		return -(state->pot / 2.0f);
 
 	return 0.0f; //chop
@@ -168,6 +171,8 @@ int get_action(float* strategy, uint8_t legal_actions) {
 	float cumulative_strat;
 	int a, last_legal_action;
 
+	last_legal_action = 0;
+	cumulative_strat = 0;
 	r = (float)rand() / (float)RAND_MAX;
 
 	for ( a = 0; a < MAX_ACTIONS; a++) {
@@ -176,7 +181,7 @@ int get_action(float* strategy, uint8_t legal_actions) {
 			last_legal_action = a;
 			cumulative_strat += strategy[a];
 
-			if ( r < cumulative_prob )
+			if ( r < cumulative_strat )
 				return a;
 		}
 	}
@@ -189,8 +194,9 @@ GameState apply_action(GameState state, int action_id) {
 
 	previous_action = state.last_action;
 	state.last_action = (1 << action_id);
+	state.history |= (state.last_action << (state.num_actions_total * 3));
 	state.num_actions_this_street++;
-	state.bet_history |= (state.last_action << (state.num_actions_this_street * 3));
+	state.num_actions_total++;
 
 	if (action_id == 0) //fold
 		return state;
@@ -265,7 +271,7 @@ int deal_random_board_card(GameState state) {
 		rcard = rand() % 6;	
 	while (state.p1_card == rcard || state.p2_card == rcard);
 
-	return r_card;
+	return rcard;
 }
 
 float mccfr(GameState state, int traverser) {
@@ -283,12 +289,14 @@ float mccfr(GameState state, int traverser) {
 
 	//chance node, going to flop
 	if (state.street == 1 && state.board_card == -1) {
-		next_state = state
+		GameState next_state = state;
 		next_state.board_card = deal_random_board_card(state);
+		next_state.num_actions_this_street = 0;
+		next_state.num_raises_this_street = 0;
 		return mccfr(next_state, traverser);
 	}
 
-	active_card = (state.active_player == P1) ? p1_card : p2_card;
+	active_card = (state.active_player == P1) ? state.p1_card : state.p2_card;
 
 	node = get_or_create_node(make_hash_key(state.history, state.board_card, active_card));
 	legal_actions = get_legal_actions(state);
@@ -315,7 +323,7 @@ float mccfr(GameState state, int traverser) {
 	}
 	else {
 		int sampled_action = get_action(strategy, legal_actions);
-		GameSate next_state = apply_action(state, sampled_action);
+		GameState next_state = apply_action(state, sampled_action);
 
 		node_value = mccfr(next_state, traverser);
 
@@ -329,6 +337,23 @@ float mccfr(GameState state, int traverser) {
 }
 
 int main() {
-	return 0;
-}
+    init_table();
+    for (int i = 0; i < 1000000; i++) {
+        GameState state = {0};
+        // Initial Deal
+        state.p1_card = rand() % 6;
+        do { state.p2_card = rand() % 6; } while (state.p2_card == state.p1_card);
+        
+        state.board_card = -1;
+        state.pot = 2; // Antes
+        state.active_player = P1;
 
+        // Alternate traversers so both players learn
+        mccfr(state, P1);
+        mccfr(state, P2);
+
+        if (i % 100000 == 0) printf("Iteration %d...\n", i);
+    }
+    // Now you can print the strategy_sum from the hash table
+    return 0;
+}
