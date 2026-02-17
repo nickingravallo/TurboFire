@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rangefinder"
+version = "0.1.0"
+description = "TUI for building poker ranges on a 13x13 hand grid"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.47.0",
+]
+
+[project.scripts]
+rangefinder = "rangefinder.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
