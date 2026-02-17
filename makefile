@@ -12,12 +12,18 @@ TEST_OUT_DIR = $(OUT_DIR)/tests
 MCCFR_DIR = mccfr
 MCCFR_OUT_DIR = $(OUT_DIR)/mccfr
 
-# Source & Object definitions
-SRCS = $(wildcard $(SRC_DIR)/*.c)
+# Source & Object definitions (exclude flop_tui.c; build with 'make flop_tui', requires ncurses)
+SRCS = $(filter-out $(SRC_DIR)/flop_tui.c, $(wildcard $(SRC_DIR)/*.c))
 OBJS = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
 
 # Main Target
 TARGET = $(OUT_DIR)/turbofire
+FLOP_TUI = $(OUT_DIR)/flop_tui
+
+# Objects for main executable (exclude flop_tui.o which has its own main)
+TURBOFIRE_OBJS = $(filter-out $(OBJ_DIR)/flop_tui.o, $(OBJS))
+# Flop TUI needs ncurses: make flop_tui (requires libncurses-dev)
+FLOP_TUI_OBJS = $(OBJ_DIR)/flop_tui.o $(OBJ_DIR)/range.o $(OBJ_DIR)/flop_solver.o $(OBJ_DIR)/gto_solver.o $(OBJ_DIR)/ranks.o
 
 # Test Sources & Binaries
 TEST_SRCS = $(wildcard $(TEST_DIR)/*.c)
@@ -34,14 +40,20 @@ LIB_OBJS = $(filter-out $(MAIN_OBJ), $(OBJS))
 
 # --- TARGETS ---
 
-all: dirs $(TARGET) tests mccfr
+all: dirs $(TARGET) $(FLOP_TUI) tests mccfr
 
 dirs:
 	@mkdir -p $(OBJ_DIR) $(OUT_DIR) $(TEST_OUT_DIR) $(MCCFR_OUT_DIR)
 
-# Link the main executable
-$(TARGET): $(OBJS)
+# Link the main executable (no flop_tui.o)
+$(TARGET): $(TURBOFIRE_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
+
+# Flop solver TUI (ncurses). Run: make flop_tui (requires libncurses-dev)
+FLOP_TUI_OBJS = $(OBJ_DIR)/flop_tui.o $(OBJ_DIR)/range.o $(OBJ_DIR)/flop_solver.o $(OBJ_DIR)/gto_solver.o $(OBJ_DIR)/ranks.o
+$(FLOP_TUI): $(FLOP_TUI_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ -lncurses
+flop_tui: $(FLOP_TUI)
 
 # Compile source files to objects
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
@@ -69,4 +81,4 @@ run: all
 clean:
 	rm -rf $(OBJ_DIR) $(OUT_DIR)
 
-.PHONY: all dirs run clean tests mccfr
+.PHONY: all dirs run clean tests mccfr flop_tui
