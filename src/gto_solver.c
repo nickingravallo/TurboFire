@@ -82,14 +82,23 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 	state->p2_hand = p2_hand;
 	state->board = 0;
 	state->pot = 1.5f;  // SB + BB
+	state->to_call = 0.0f;
 	state->street = STREET_PREFLOP;
 	state->active_player = P1;
 	state->num_actions_this_street = 0;
 	state->num_raises_this_street = 0;
 	state->num_actions_total = 0;
 	state->last_action = 0;
+	state->facing_bet = false;
 	state->is_terminal = false;
 }
+
+/* Bet fractions (pot): 0=check, 33, 52, 75, 100, 123 */
+static const int BET_PCT[] = { 0, 33, 52, 75, 100, 123 };
+/* Raise fractions (pot) for IP: 33, 75, 123 */
+static const int RAISE_PCT[] = { 33, 75, 123 };
+/* Keep tree finite to avoid runaway recursion in flop-only game. */
+#define MAX_RAISES_PER_STREET 2
 
 void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint64_t board) {
 	memset(state, 0, sizeof(GameState));
@@ -97,12 +106,14 @@ void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, u
 	state->p2_hand = p2_hand;
 	state->board = board;
 	state->pot = 1.5f;
+	state->to_call = 0.0f;
 	state->street = STREET_FLOP;
 	state->active_player = P1;
 	state->num_actions_this_street = 0;
 	state->num_raises_this_street = 0;
 	state->num_actions_total = 0;
 	state->last_action = 0;
+	state->facing_bet = false;
 	state->is_terminal = false;
 }
 
@@ -110,19 +121,6 @@ void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, u
 bool is_terminal_state(GameState* state) {
 	if (state->is_terminal)
 		return true;
-	
-	// Fold ends the hand
-	if (state->last_action == FOLD_MASK)
-		return true;
-	
-	// On river, call/check-check ends the hand
-	if (state->street == STREET_RIVER) {
-		if (state->last_action == CALL_MASK)
-			return true;
-		if (state->last_action == CHECK_MASK && state->num_actions_this_street >= 2)
-			return true;
-	}
-	
 	return false;
 }
 
@@ -132,9 +130,8 @@ float gto_get_payout(GameState* state, int traverser) {
 	uint64_t traverser_hand, opponent_hand;
 	int traverser_strength, opponent_strength;
 	
-	// Fold case
-	if (state->last_action == FOLD_MASK) {
-		// If traverser folded, they lose their share of the pot
+	// Fold case: last_action 0 when facing_bet meant Fold; folder is active_player (they just acted)
+	if (state->is_terminal && state->last_action == 0 && state->facing_bet) {
 		return (state->active_player == traverser) ? -(state->pot / 2.0f) : (state->pot / 2.0f);
 	}
 	
@@ -160,93 +157,115 @@ float gto_get_payout(GameState* state, int traverser) {
 	return 0.0f;
 }
 
-// Get legal actions at current state
+// Replay flop history (decode action_ids from history and apply; used to get state at a node)
+void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, GameState* out_state) {
+	GameState s;
+	int i;
+	if (!out_state) return;
+	gto_init_flop_state(&s, 0, 0, board);
+	if (num_actions <= 0) {
+		*out_state = s;
+		return;
+	}
+	for (i = 0; i < num_actions && !s.is_terminal; i++) {
+		int a = (int)((history >> (i * BITS_PER_ACTION)) & 7u);
+		s = gto_apply_action(s, a);
+	}
+	*out_state = s;
+}
+
+// Get legal actions at current state (flop: OOP 6 actions, IP facing check 6, IP facing bet 5)
 uint8_t gto_get_legal_actions(GameState* state) {
 	uint8_t legal_mask = 0;
-	bool is_facing_bet;
-	
-	legal_mask |= CHECK_MASK;  // Can always check/call
-	
-	is_facing_bet = (state->last_action == RAISE_MASK || state->last_action == BET_MASK);
-	if (is_facing_bet)
-		legal_mask |= FOLD_MASK;  // Can fold when facing a bet
-	
-	// Can bet/raise if under raise limit (simplified: max 2 raises per street)
-	if (state->num_raises_this_street < 2)
-		legal_mask |= RAISE_MASK;
-	
+	int i;
+	if (state->street != STREET_FLOP)
+		return 0;
+	if (state->facing_bet) {
+		/* Facing bet: Fold(0), Call(1), optional Raise33/75/123 (2..4). */
+		legal_mask |= (1u << 0);
+		legal_mask |= (1u << 1);
+		if (state->num_raises_this_street < MAX_RAISES_PER_STREET) {
+			for (i = 2; i <= 4; i++)
+				legal_mask |= (1u << i);
+		}
+		return legal_mask;
+	}
+	/* OOP first node or IP facing check: Check(0), Bet33(1), Bet52(2), Bet75(3), Bet100(4), Bet123(5) */
+	for (i = 0; i <= 5; i++)
+		legal_mask |= (1u << i);
 	return legal_mask;
 }
 
-// Apply action and transition to next state
+// Apply action and transition to next state (flop action set)
 GameState gto_apply_action(GameState state, int action_id) {
-	int previous_action;
-	float bet_amount;
-	
-	previous_action = state.last_action;
-	state.last_action = (1 << action_id);
-	state.history |= (state.last_action << (state.num_actions_total * 3));
-	state.num_actions_this_street++;
-	state.num_actions_total++;
-	
-	if (action_id == 0) {  // Fold
+	float bet_size, raise_size;
+	/* Prevent undefined shifts in history encoding and bound recursion depth. */
+	if (state.num_actions_total >= MAX_HISTORY) {
 		state.is_terminal = true;
 		return state;
 	}
-	else if (action_id == 1) {  // Check or Call
-		bool is_facing_bet = (previous_action == RAISE_MASK || previous_action == BET_MASK);
-		
-		if (is_facing_bet) {  // Call
-			bet_amount = (state.street == STREET_PREFLOP) ? 0.5f : 1.0f;  // Call amount
-			state.pot += bet_amount;
-			
-			// Advance street if calling on preflop/flop/turn
-			if (state.street < STREET_RIVER) {
+	/* Encode history: store action_id in BITS_PER_ACTION bits */
+	state.history |= ((uint64_t)(action_id & 7) << (state.num_actions_total * BITS_PER_ACTION));
+	state.last_action = (uint8_t)(action_id & 0xFF);
+	state.num_actions_this_street++;
+	state.num_actions_total++;
+
+	if (state.facing_bet) {
+		/* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123 */
+		if (action_id == 0) {
+			state.is_terminal = true;
+			return state;
+		}
+		if (action_id == 1) {
+			state.pot += state.to_call;
+			state.to_call = 0.0f;
+			/* Flop-only solver: treat call on flop as terminal (no turn/river). */
+			state.is_terminal = true;
+			return state;
+		}
+		if (action_id >= 2 && action_id <= 4) {
+			raise_size = state.pot * (float)RAISE_PCT[action_id - 2] / 100.0f;
+			state.pot += state.to_call + raise_size;
+			state.to_call = raise_size;
+			state.num_raises_this_street++;
+			/* After a raise, action passes back to the other player. */
+			state.active_player = (uint8_t)(1 - state.active_player);
+			state.facing_bet = true;
+			return state;
+		}
+		return state;
+	}
+	/* OOP or IP facing check: 0=Check, 1..5=Bet33..Bet123 */
+	if (action_id == 0) {
+		if (state.num_actions_this_street >= 2) {
+			/* Flop-only solver: check-check on flop is terminal (no turn/river). */
+			if (state.street == STREET_FLOP) {
+				state.is_terminal = true;
+			} else if (state.street < STREET_RIVER) {
 				state.street++;
 				state.num_actions_this_street = 0;
 				state.num_raises_this_street = 0;
 				state.active_player = P1;
 				state.last_action = 0;
-			}
-			else {
-				// River call ends the hand
+				state.facing_bet = false;
+			} else {
 				state.is_terminal = true;
 			}
+		} else {
+			state.active_player = 1 - state.active_player;
+			state.facing_bet = false;
 		}
-		else {  // Check
-			if (state.num_actions_this_street >= 2) {
-				// Both players checked - advance street or end hand
-				if (state.street < STREET_RIVER) {
-					state.street++;
-					state.num_actions_this_street = 0;
-					state.num_raises_this_street = 0;
-					state.active_player = P1;
-					state.last_action = 0;
-				}
-				else {
-					// River check-check ends the hand
-					state.is_terminal = true;
-				}
-			}
-			else {
-				// Switch active player
-				state.active_player = 1 - state.active_player;
-			}
-		}
+		return state;
 	}
-	else if (action_id == 2) {  // Bet or Raise
-		bet_amount = (state.street == STREET_PREFLOP) ? 2.0f : 1.0f;  // Bet size
-		bool is_facing_bet = (previous_action == RAISE_MASK || previous_action == BET_MASK);
-		
-		if (is_facing_bet)
-			state.pot += bet_amount * 2;  // Raise: match + raise
-		else
-			state.pot += bet_amount;  // Bet
-		
+	if (action_id >= 1 && action_id <= 5) {
+		bet_size = state.pot * (float)BET_PCT[action_id] / 100.0f;
+		state.pot += bet_size;
+		state.to_call = bet_size;
 		state.num_raises_this_street++;
 		state.active_player = 1 - state.active_player;
+		state.facing_bet = true;
+		return state;
 	}
-	
 	return state;
 }
 
@@ -269,6 +288,11 @@ void gto_get_strategy(float* regret, float* out_strategy, uint8_t legal_actions)
 		}
 	}
 	
+	if (num_legal_actions == 0) {
+		for (i = 0; i < MAX_ACTIONS; i++)
+			out_strategy[i] = 1.0f / (float)MAX_ACTIONS;
+		return;
+	}
 	for (i = 0; i < MAX_ACTIONS; i++) {
 		if (legal_actions & (1 << i)) {
 			if (normalized_sum > 0)

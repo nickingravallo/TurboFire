@@ -5,16 +5,32 @@
 #include <stdbool.h>
 #include "ranks.h"
 
-#define MAX_ACTIONS    3  // fold, check/call, bet/raise
+#define MAX_ACTIONS    8   // OOP: Check + 5 bet sizes; IP facing bet: Fold, Call, 3 raise sizes
+#define BITS_PER_ACTION 3  // history stores action_id 0..7 per action
 #define MAX_HISTORY    100
 #define TABLE_SIZE     1000003
 #define EMPTY_MAGIC    0xBEEFBEEF
 
-#define FOLD_MASK      1
-#define CHECK_MASK     2
-#define CALL_MASK      2
-#define RAISE_MASK     4
-#define BET_MASK       4
+/* Action IDs: OOP / IP facing check use 0=Check, 1=Bet33, 2=Bet52, 3=Bet75, 4=Bet100, 5=Bet123.
+ * IP facing bet uses 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123. */
+#define ACTION_CHECK   0
+#define ACTION_BET_33  1
+#define ACTION_BET_52  2
+#define ACTION_BET_75  3
+#define ACTION_BET_100 4
+#define ACTION_BET_123 5
+#define ACTION_FOLD    0   // when facing bet
+#define ACTION_CALL    1
+#define ACTION_RAISE_33  2
+#define ACTION_RAISE_75  3
+#define ACTION_RAISE_123 4
+
+/* Legacy masks for terminal checks: treat action_id as "last action taken" (0..7). */
+#define FOLD_MASK      0   // Fold is action_id 0 when facing bet
+#define CHECK_MASK     0   // Check is action_id 0 when not facing bet
+#define CALL_MASK      1
+#define RAISE_MASK     4   // any raise
+#define BET_MASK       1   // any bet (1..5)
 
 #define P1             0
 #define P2             1
@@ -25,8 +41,9 @@
 #define STREET_RIVER   3
 
 typedef struct {
-	uint64_t history;           // Action history encoded (3 bits per action)
+	uint64_t history;           // Action history (BITS_PER_ACTION bits per action_id)
 	float pot;                  // Current pot size
+	float to_call;              // Amount current player must call (0 if no bet)
 	uint64_t p1_hand;           // Player 1 hole cards (bitmask)
 	uint64_t p2_hand;           // Player 2 hole cards (bitmask)
 	uint64_t board;             // Board cards (bitmask)
@@ -35,7 +52,8 @@ typedef struct {
 	uint8_t num_actions_this_street;
 	uint8_t num_raises_this_street;
 	uint8_t num_actions_total;
-	uint8_t last_action;        // Last action taken (mask)
+	uint8_t last_action;        // Last action_id taken (0..7)
+	bool facing_bet;            // True if current player faces a bet (so action_id 0 = Fold)
 	bool is_terminal;           // Terminal state flag
 } GameState;
 
@@ -67,6 +85,8 @@ bool is_terminal_state(GameState* state);
 float gto_get_payout(GameState* state, int traverser);
 uint8_t gto_get_legal_actions(GameState* state);
 GameState gto_apply_action(GameState state, int action_id);
+// Replay flop history from start; inits state with p1=0,p2=0,board, then applies num_actions from history.
+void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, GameState* out_state);
 
 // MCCFR algorithm
 void gto_get_strategy(float* regret, float* out_strategy, uint8_t legal_actions);

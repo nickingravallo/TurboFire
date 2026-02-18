@@ -88,24 +88,52 @@ int flop_solver_get_hand_strategy(uint64_t history, uint64_t board, uint64_t hol
 }
 
 int flop_solver_get_oop_strategy(const FlopSolver *fs, int row, int col, float probs[FLOP_MAX_ACTIONS]) {
+	return flop_solver_get_strategy_at_history(fs, 0, 0, row, col, probs, NULL);
+}
+
+void flop_solver_get_state_at_history(const FlopSolver *fs, uint64_t history, int num_actions, GameState *out_state) {
+	if (!fs || !out_state) return;
+	gto_replay_flop_history(history, fs->board, num_actions, out_state);
+}
+
+int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, int num_actions,
+	int row, int col, float probs[FLOP_MAX_ACTIONS], int *num_actions_out) {
+	GameState state;
+	const float (*weights)[FLOP_GRID_SIZE];
+	char hand_str[8];
+	uint64_t c1[MAX_COMBOS], c2[MAX_COMBOS];
+	int n, i, a, n_actions, n_seen;
+	float sum[FLOP_MAX_ACTIONS], total;
+
 	if (!fs || !fs->solved || row < 0 || row >= FLOP_GRID_SIZE || col < 0 || col >= FLOP_GRID_SIZE)
 		return -1;
-	if (fs->oop_weights[row][col] <= 0.0f) return -1;
-	char hand_str[8];
+	flop_solver_get_state_at_history(fs, history, num_actions, &state);
+	if (state.is_terminal) return -1;
+	weights = (state.active_player == P1) ? fs->oop_weights : fs->ip_weights;
+	if (weights[row][col] <= 0.0f) return -1;
+	n_actions = state.facing_bet ? 5 : 6;
+	if (num_actions_out) *num_actions_out = n_actions;
+
 	hand_at(row, col, hand_str, sizeof(hand_str));
-	uint64_t c1[MAX_COMBOS], c2[MAX_COMBOS];
-	int n = hand_string_to_combos(hand_str, fs->board, c1, c2, MAX_COMBOS);
+	n = hand_string_to_combos(hand_str, fs->board, c1, c2, MAX_COMBOS);
 	if (n <= 0) return -1;
-	float sum[FLOP_MAX_ACTIONS];
-	for (int a = 0; a < FLOP_MAX_ACTIONS; a++) sum[a] = 0.0f;
-	uint64_t history = 0;
-	for (int i = 0; i < n; i++) {
+	for (a = 0; a < FLOP_MAX_ACTIONS; a++) sum[a] = 0.0f;
+	n_seen = 0;
+	for (i = 0; i < n; i++) {
 		uint64_t hand = c1[i] | c2[i];
 		float p[FLOP_MAX_ACTIONS];
 		if (flop_solver_get_hand_strategy(history, fs->board, hand, p) == 0) {
-			for (int a = 0; a < FLOP_MAX_ACTIONS; a++) sum[a] += p[a];
+			for (a = 0; a < n_actions; a++) sum[a] += p[a];
+			n_seen++;
 		}
 	}
-	for (int a = 0; a < FLOP_MAX_ACTIONS; a++) probs[a] = sum[a] / (float)n;
+	if (n_seen <= 0) return -1;
+	for (a = 0; a < n_actions; a++) probs[a] = sum[a] / (float)n_seen;
+	total = 0.0f;
+	for (a = 0; a < n_actions; a++) total += probs[a];
+	if (total > 0.0f) {
+		for (a = 0; a < n_actions; a++) probs[a] /= total;
+	}
+	for (a = n_actions; a < FLOP_MAX_ACTIONS; a++) probs[a] = 0.0f;
 	return 0;
 }
