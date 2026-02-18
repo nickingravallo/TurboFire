@@ -6,7 +6,7 @@
 #include "gto_solver.h"
 
 #define FLOP_GRID_SIZE 13
-#define FLOP_MAX_ACTIONS 8  /* OOP: 6 actions; IP facing bet: 5 actions. Only first N used per node. */
+#define FLOP_MAX_ACTIONS 8  /* OOP: 4 actions; IP facing bet: 5 actions. Only first N used per node. */
 
 /* OOP = P1 (acts first on flop), IP = P2. */
 
@@ -60,7 +60,7 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations);
 void flop_solver_begin_parallel_solve(FlopSolver *fs);
 void flop_solver_end_parallel_solve(FlopSolver *fs);
 
-/* Get OOP strategy at start of flop (history=0) for hand (row,col). Fills probs[0..5] = Check, Bet33..Bet123. Return 0 if ok. */
+/* Get OOP strategy at start of flop (history=0) for hand (row,col). Fills probs[0..3] = Check, Bet33, Bet52, Bet100. Return 0 if ok. */
 int flop_solver_get_oop_strategy(const FlopSolver *fs, int row, int col, float probs[FLOP_MAX_ACTIONS]);
 
 /* Get strategy for a specific hole hand (bitmask) at history/num_actions and board. */
@@ -76,7 +76,7 @@ int flop_solver_get_hand_strategy_with_runout(
 /* Replay postflop history and fill state. Use to get active_player and legal_actions at a node. */
 void flop_solver_get_state_at_history(const FlopSolver *fs, uint64_t history, int num_actions, GameState *out_state);
 
-/* Get strategy at history for (row,col) for whoever acts at that node. Fills probs[], sets *num_actions to 6 or 5. Return 0 if ok. */
+/* Get strategy at history for (row,col) for whoever acts at that node. Fills probs[], sets *num_actions to 4 or 5. Return 0 if ok. */
 int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, int num_actions,
 	int row, int col, float probs[FLOP_MAX_ACTIONS], int *num_actions_out);
 

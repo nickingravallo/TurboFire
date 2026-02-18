@@ -1,8 +1,28 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O3 -march=native -I src -pthread -fopenmp
+CFLAGS = -Wall -Wextra -O3 -march=native -I src -pthread
 SRC_DIR = src
 OBJ_DIR = obj
 OUT_DIR = output
+UNAME_S := $(shell uname -s)
+
+# OpenMP support:
+# - Linux: use -fopenmp
+# - macOS: use Homebrew libomp if installed, otherwise build without OpenMP
+OPENMP_CFLAGS =
+OPENMP_LDFLAGS =
+
+ifeq ($(UNAME_S),Darwin)
+	ifneq ($(wildcard /opt/homebrew/opt/libomp),)
+		OPENMP_CFLAGS = -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include
+		OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
+	else ifneq ($(wildcard /usr/local/opt/libomp),)
+		OPENMP_CFLAGS = -Xpreprocessor -fopenmp -I/usr/local/opt/libomp/include
+		OPENMP_LDFLAGS = -L/usr/local/opt/libomp/lib -lomp
+	endif
+else
+	OPENMP_CFLAGS = -fopenmp
+	OPENMP_LDFLAGS =
+endif
 
 # Test Configuration
 TEST_DIR = test
@@ -42,18 +62,18 @@ dirs:
 
 # Link the main executable (solver TUI, requires ncurses, pthread, openmp)
 $(TARGET): $(TURBOFIRE_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ -lncurses -pthread -fopenmp
+	$(CC) $(CFLAGS) $(OPENMP_CFLAGS) -o $@ $^ -lncurses -pthread $(OPENMP_LDFLAGS)
 
 # Compile source files to objects
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(OPENMP_CFLAGS) -c $< -o $@
 
 # --- TEST RULES ---
 
 tests: $(TEST_BINS)
 
 $(TEST_OUT_DIR)/%: $(TEST_DIR)/%.c $(LIB_OBJS)
-	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@ -pthread -fopenmp
+	$(CC) $(CFLAGS) $(OPENMP_CFLAGS) $< $(LIB_OBJS) -o $@ -pthread $(OPENMP_LDFLAGS)
 
 # --- MCCFR RULES ---
 
@@ -62,7 +82,7 @@ mccfr: dirs $(MCCFR_BINS)
 # Compile mccfr files
 # Links against LIB_OBJS so you can use your src/ functions (like card eval) inside mccfr/
 $(MCCFR_OUT_DIR)/%: $(MCCFR_DIR)/%.c $(LIB_OBJS)
-	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@ -pthread -fopenmp
+	$(CC) $(CFLAGS) $(OPENMP_CFLAGS) $< $(LIB_OBJS) -o $@ -pthread $(OPENMP_LDFLAGS)
 
 run: all
 	./$(TARGET)

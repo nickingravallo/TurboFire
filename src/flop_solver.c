@@ -32,6 +32,25 @@ static int get_solver_thread_count(void) {
 	return 1;
 }
 
+/* True if this infoset has any learned signal on currently legal actions. */
+static int infoset_has_learned_signal(const InfoSet *node, uint8_t legal_actions) {
+	int a;
+	float strategy_mass = 0.0f;
+	if (!node || legal_actions == 0)
+		return 0;
+	for (a = 0; a < FLOP_MAX_ACTIONS; a++) {
+		if (!(legal_actions & (1u << a)))
+			continue;
+		if (node->strategy_sum[a] > 0.0f)
+			strategy_mass += node->strategy_sum[a];
+		if (node->regret_sum[a] > 1e-6f)
+			return 1;
+	}
+	if (strategy_mass > 1e-6f)
+		return 1;
+	return 0;
+}
+
 typedef struct {
 	FlopSolver *fs;
 	int thread_id;
@@ -395,6 +414,8 @@ int flop_solver_get_hand_strategy_with_runout(
 	));
 	if (!node) return -1;
 	legal_actions = gto_get_legal_actions(&state);
+	if (!infoset_has_learned_signal(node, legal_actions))
+		return -1;
 	gto_get_average_strategy(node, probs);
 	for (a = 0; a < FLOP_MAX_ACTIONS; a++) {
 		if (!(legal_actions & (1u << a)))
@@ -446,7 +467,7 @@ int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, 
 	if (state.is_terminal) return -1;
 	weights = (state.active_player == P1) ? fs->oop_weights : fs->ip_weights;
 	if (weights[row][col] <= 0.0f) return -1;
-	n_actions = state.facing_bet ? 5 : 6;
+	n_actions = state.facing_bet ? 5 : 4;
 	if (num_actions_out) *num_actions_out = n_actions;
 
 	hand_at(row, col, hand_str, sizeof(hand_str));

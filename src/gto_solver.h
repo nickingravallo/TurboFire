@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include "ranks.h"
 
-#define MAX_ACTIONS    8   // OOP: Check + 5 bet sizes; IP facing bet: Fold, Call, 3 raise sizes
+#define MAX_ACTIONS    8   // OOP: Check + 3 bet sizes; IP facing bet: Fold, Call, 3 raise sizes
 #define BITS_PER_ACTION 3  // history stores action_id 0..7 per action
 #define MAX_HISTORY    100
 #define TABLE_SIZE     8000003   /* ~700MB/table; reduce if OOM. Increase for faster merge (more RAM). */
@@ -13,26 +13,24 @@
 #define STARTING_FLOP_POT_BB 6.0f
 #define STARTING_STACK_BB 97.0f
 
-/* Action IDs: OOP / IP facing check use 0=Check, 1=Bet33, 2=Bet52, 3=Bet75, 4=Bet100, 5=Bet123.
- * IP facing bet uses 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123. */
+/* Action IDs: OOP / IP facing check use 0=Check, 1=Bet33, 2=Bet52, 3=Bet100.
+ * IP facing bet uses 0=Fold, 1=Call, 2=Raise33, 3=Raise52, 4=Raise100. */
 #define ACTION_CHECK   0
 #define ACTION_BET_33  1
 #define ACTION_BET_52  2
-#define ACTION_BET_75  3
-#define ACTION_BET_100 4
-#define ACTION_BET_123 5
+#define ACTION_BET_100 3
 #define ACTION_FOLD    0   // when facing bet
 #define ACTION_CALL    1
 #define ACTION_RAISE_33  2
-#define ACTION_RAISE_75  3
-#define ACTION_RAISE_123 4
+#define ACTION_RAISE_52  3
+#define ACTION_RAISE_100 4
 
 /* Legacy masks for terminal checks: treat action_id as "last action taken" (0..7). */
 #define FOLD_MASK      0   // Fold is action_id 0 when facing bet
 #define CHECK_MASK     0   // Check is action_id 0 when not facing bet
 #define CALL_MASK      1
 #define RAISE_MASK     4   // any raise
-#define BET_MASK       1   // any bet (1..5)
+#define BET_MASK       1   // any bet (1..3)
 
 #define P1             0
 #define P2             1

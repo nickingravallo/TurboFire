@@ -218,10 +218,10 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 	state->is_terminal = false;
 }
 
-/* Bet fractions (pot): 0=check, 33, 52, 75, 100, 123 */
-static const int BET_PCT[] = { 0, 33, 52, 75, 100, 123 };
-/* Raise fractions (pot) for IP: 33, 75, 123 */
-static const int RAISE_PCT[] = { 33, 75, 123 };
+/* Bet fractions (pot): 0=check, 33, 52, 100 */
+static const int BET_PCT[] = { 0, 33, 52, 100 };
+/* Raise fractions (pot) for IP: 33, 52, 100 */
+static const int RAISE_PCT[] = { 33, 52, 100 };
 /* Keep tree finite to avoid runaway recursion in deep lines. */
 #define MAX_RAISES_PER_STREET 2
 
@@ -303,7 +303,7 @@ void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, 
 	gto_replay_postflop_history(history, board, 0, 0, num_actions, out_state);
 }
 
-// Get legal actions at current state (OOP/IP facing check: 6 actions, facing bet: up to 5 actions)
+// Get legal actions at current state (OOP/IP facing check: 4 actions, facing bet: up to 5 actions)
 uint8_t gto_get_legal_actions(GameState* state) {
 	uint8_t legal_mask = 0;
 	int i;
@@ -316,7 +316,7 @@ uint8_t gto_get_legal_actions(GameState* state) {
 	if (state->street < STREET_FLOP || state->street > STREET_RIVER)
 		return 0;
 	if (state->facing_bet) {
-		/* Facing bet: Fold(0), Call(1), optional Raise33/75/123 (2..4). */
+		/* Facing bet: Fold(0), Call(1), optional Raise33/52/100 (2..4). */
 		legal_mask |= (1u << 0);
 		if (actor_stack > 0.0f)
 			legal_mask |= (1u << 1);
@@ -346,9 +346,9 @@ uint8_t gto_get_legal_actions(GameState* state) {
 		}
 		return legal_mask;
 	}
-	/* OOP first node or IP facing check: Check(0), Bet33(1), Bet52(2), Bet75(3), Bet100(4), Bet123(5) */
+	/* OOP first node or IP facing check: Check(0), Bet33(1), Bet52(2), Bet100(3) */
 	legal_mask |= (1u << 0);
-	for (i = 1; i <= 5; i++) {
+	for (i = 1; i <= 3; i++) {
 		float desired_bet = state->pot * (float)BET_PCT[i] / 100.0f;
 		float commit = (desired_bet < actor_stack) ? desired_bet : actor_stack;
 		if (commit <= 0.0f)
@@ -412,7 +412,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 	actor_contribution = (state.active_player == P1) ? &state.p1_contribution : &state.p2_contribution;
 
 	if (state.facing_bet) {
-		/* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123 */
+		/* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise52, 4=Raise100 */
 		if (action_id == 0) {
 			state.is_terminal = true;
 			return state;
@@ -457,7 +457,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 		}
 		return state;
 	}
-	/* OOP or IP facing check: 0=Check, 1..5=Bet33..Bet123 */
+	/* OOP or IP facing check: 0=Check, 1=Bet33, 2=Bet52, 3=Bet100 */
 	if (action_id == 0) {
 		if (state.num_actions_this_street >= 2) {
 			gto_advance_to_next_street(&state);
@@ -467,7 +467,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 		}
 		return state;
 	}
-	if (action_id >= 1 && action_id <= 5) {
+	if (action_id >= 1 && action_id <= 3) {
 		desired_bet = state.pot * (float)BET_PCT[action_id] / 100.0f;
 		actor_commit = (desired_bet < *actor_stack) ? desired_bet : *actor_stack;
 		if (actor_commit <= 0.0f)

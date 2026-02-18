@@ -20,10 +20,10 @@
 #define STATUS_ROWS 6
 static const char SUITS[] = "shdc";  /* suit 0=S, 1=H, 2=D, 3=C */
 
-/* OOP action labels (6): Check, Bet33, Bet52, Bet75, Bet100, Bet123 */
-static const char *const OOP_ACTION_LABELS[] = { "Check", "Bet33%", "Bet52%", "Bet75%", "Bet100%", "Bet123%" };
-/* IP facing bet (5): Fold, Call, R33, R75, R123 */
-static const char *const IP_BET_ACTION_LABELS[] = { "Fold", "Call", "R33%", "R75%", "R123%" };
+/* OOP action labels (4): Check, Bet33, Bet52, Bet100 */
+static const char *const OOP_ACTION_LABELS[] = { "Check", "Bet33%", "Bet52%", "Bet100%" };
+/* IP facing bet (5): Fold, Call, R33, R52, R100 */
+static const char *const IP_BET_ACTION_LABELS[] = { "Fold", "Call", "R33%", "R52%", "R100%" };
 
 static FlopSolver g_fs;
 static int g_cursor_row, g_cursor_col;
@@ -36,7 +36,7 @@ static int g_solving;
 static int g_merging;  /* 1 = inside merge phase (workers done, merging into global table) */
 static int g_merge_current;  /* merge step (0..g_merge_total) */
 static int g_merge_total;    /* total merge steps (thread count) */
-static int g_iterations = 50000;
+static int g_iterations = 10000000;
 static int g_has_colors;
 static int g_solve_done_iters;
 static int g_solve_target_iters;
@@ -127,15 +127,24 @@ static void format_board_for_status(uint64_t board_mask, char *board_out, size_t
 
 static int action_color_pair(int facing_bet, int action_idx) {
 	if (facing_bet) {
-		/* Fold blue, call green, R33/R75/R123 light/medium/dark red. */
+		/* Fold blue, call green, R33/R52/R100 light/medium/dark red. */
 		if (action_idx == 0) return 2;
 		if (action_idx == 1) return 3;
 		if (action_idx == 2) return 4;
 		if (action_idx == 3) return 5;
 		return 6;
 	}
-	/* Check green, all bet sizes green. */
-	return 3;
+	/* Check green; Bet33/52/100 are light/medium/dark red. */
+	if (action_idx == 0) return 3;  /* Check */
+	if (action_idx == 1) return 4;  /* Bet33 */
+	if (action_idx == 2) return 5;  /* Bet52 */
+	return 6;                       /* Bet100 */
+}
+
+static int action_text_attr(int facing_bet, int action_idx) {
+	(void)facing_bet;
+	(void)action_idx;
+	return A_BOLD;
 }
 
 /* Background pair (7-11) for cell segment by action. */
@@ -147,7 +156,11 @@ static int action_idx_to_bg_pair(int facing_bet, int action_idx) {
 		if (action_idx == 3) return 10;
 		return 11;
 	}
-	return 8; /* Check or bet -> green */
+	/* Check green; Bet33/52/100 are light/medium/dark red. */
+	if (action_idx == 0) return 8;   /* Check */
+	if (action_idx == 1) return 9;   /* Bet33 */
+	if (action_idx == 2) return 10;  /* Bet52 */
+	return 11;                       /* Bet100 */
 }
 
 static void draw_action_breakdown_line(
@@ -176,9 +189,9 @@ static void draw_action_breakdown_line(
 		char chunk[32];
 		int n = snprintf(chunk, sizeof(chunk), "%-7s %5.1f%%   ", labels[j], probs[j] * 100.0f);
 		if (n <= 0) continue;
-		if (g_has_colors) wattron(win, COLOR_PAIR(action_color_pair(facing_bet, j)) | A_BOLD);
+		if (g_has_colors) wattron(win, COLOR_PAIR(action_color_pair(facing_bet, j)) | action_text_attr(facing_bet, j));
 		mvwaddnstr(win, row, x, chunk, w - 1 - x);
-		if (g_has_colors) wattroff(win, COLOR_PAIR(action_color_pair(facing_bet, j)) | A_BOLD);
+		if (g_has_colors) wattroff(win, COLOR_PAIR(action_color_pair(facing_bet, j)) | action_text_attr(facing_bet, j));
 		x += n;
 	}
 }
@@ -261,7 +274,7 @@ static void format_path(char *buf, size_t sz) {
 	if (g_current_num_actions == 1) {
 		int a = (int)(g_current_history & 7u);
 		if (a < 0) a = 0;
-		if (a > 5) a = 5;
+		if (a > 3) a = 3;
 		snprintf(buf, sz, "OOP %s -> IP to act", OOP_ACTION_LABELS[a]);
 		return;
 	}
@@ -290,7 +303,7 @@ static void redraw_status(WINDOW *win) {
 	flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
 	format_path(path_buf, sizeof(path_buf));
 	format_board_for_status(display_board_for_street(&state), board_disp, sizeof(board_disp));
-	snprintf(controls, sizeof(controls), " v view   b back   0-5 act  |  wasd move  |  q quit ");
+	snprintf(controls, sizeof(controls), " v view   b back   0-4 act  |  wasd move  |  q quit ");
 	werase(win);
 
 	if (g_solving) {
@@ -439,7 +452,7 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 		init_pair(2, COLOR_BLUE, COLOR_BLACK);
 		init_pair(3, COLOR_GREEN, COLOR_BLACK);
 		if (can_change_color()) {
-			/* Three red shades: light (R33), medium (R75), dark (R123). Reuse RED, YELLOW, MAGENTA. */
+			/* Three red shades: light (R33), medium (R52), dark (R100). Reuse RED, YELLOW, MAGENTA. */
 			init_color(COLOR_RED, 627, 0, 0);       /* dark red */
 			init_color(COLOR_YELLOW, 863, 235, 235); /* medium red */
 			init_color(COLOR_MAGENTA, 1000, 471, 471); /* light red */
@@ -510,14 +523,14 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 				g_current_num_actions = 0;
 				g_view_oop = 1;
 			}
-		} else if (ch >= '0' && ch <= '5') {
-			/* Any non-terminal node: 0-5 when facing check, 0-4 when facing bet */
+		} else if (ch >= '0' && ch <= '4') {
+			/* Any non-terminal node: 0-3 when facing check, 0-4 when facing bet */
 			flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
 			if (state.is_terminal)
 				; /* ignore */
 			else {
 				int a = ch - '0';
-				int max_key = state.facing_bet ? 4 : 5;
+				int max_key = state.facing_bet ? 4 : 3;
 				if (a <= max_key) {
 					g_current_history |= ((uint64_t)(a & 7) << (g_current_num_actions * BITS_PER_ACTION));
 					g_current_num_actions++;
