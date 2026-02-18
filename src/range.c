@@ -103,6 +103,29 @@ uint64_t range_parse_board(const char *str, int *ncards) {
 	return board;
 }
 
+int range_parse_board_cards(const char *str, uint64_t out_cards[5], int *ncards) {
+	uint64_t seen = 0;
+	int n = 0;
+	if (ncards) *ncards = 0;
+	if (!str || !out_cards)
+		return -1;
+	while (str[0] && str[1]) {
+		uint64_t card;
+		if (n >= 5)
+			return -1;
+		card = range_parse_card(str);
+		if (!card || (seen & card))
+			return -1;
+		out_cards[n++] = card;
+		seen |= card;
+		str += 2;
+	}
+	if (str[0] != '\0')
+		return -1;
+	if (ncards) *ncards = n;
+	return 0;
+}
+
 int hand_combos_count(const char *hand) {
 	int row, col;
 	row_col_for_hand(hand, &row, &col);

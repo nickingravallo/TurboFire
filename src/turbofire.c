@@ -1,6 +1,6 @@
 /*
  * TurboFire solver TUI: 13x13 grid, highlight hand for action breakdown, traverse streets.
- * Usage: turbofire <oop_range.json> <ip_range.json> <board>  e.g. turbofire oop.json ip.json AhKhQd
+ * Usage: turbofire <oop_range.json> <ip_range.json> <board>  e.g. turbofire oop.json ip.json AhKhQd3c4d
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -29,7 +29,6 @@ static int g_cursor_row, g_cursor_col;
 static uint64_t g_current_history;   /* 0 = OOP to act; else encoded action path */
 static int g_current_num_actions;   /* 0 = root, 1 = after one OOP action, etc. */
 static int g_view_oop;              /* 1 = viewing OOP range/strategy, 0 = viewing IP */
-static char g_board_str[BOARD_STR_LEN];
 static char g_oop_name[64];
 static char g_ip_name[64];
 static int g_solving;
@@ -82,27 +81,32 @@ static void print_line_clipped(WINDOW *win, int row, const char *text) {
 	waddnstr(win, text, w - 1);
 }
 
-/* Render compact board string (e.g. "Kd7h2s") as spaced cards ("Kd 7h 2s"). */
-static void format_board_for_status(const char *board_in, char *board_out, size_t out_sz) {
-	size_t in_len;
+/* Render board bitmask as spaced cards (e.g. "Kd 7h 2s"). */
+static void format_board_for_status(uint64_t board_mask, char *board_out, size_t out_sz) {
 	size_t out_i = 0;
 
 	if (!board_out || out_sz == 0) return;
-	if (!board_in) {
+	if (!board_mask) {
 		snprintf(board_out, out_sz, "(no board)");
 		return;
 	}
 
-	in_len = strlen(board_in);
-	if (in_len < 2) {
-		snprintf(board_out, out_sz, "%s", board_in);
-		return;
+	for (int rank = 12; rank >= 0 && out_i + 1 < out_sz; rank--) {
+		for (int suit = 0; suit < 4 && out_i + 1 < out_sz; suit++) {
+			uint64_t card = range_make_card(rank, suit);
+			if (!(board_mask & card))
+				continue;
+			if (out_i > 0 && out_i + 1 < out_sz)
+				board_out[out_i++] = ' ';
+			if (out_i + 1 < out_sz)
+				board_out[out_i++] = RANKS_STR[rank];
+			if (out_i + 1 < out_sz)
+				board_out[out_i++] = SUITS[suit];
+		}
 	}
-
-	for (size_t i = 0; i < in_len && out_i + 1 < out_sz; i += 2) {
-		if (i > 0 && out_i + 1 < out_sz) board_out[out_i++] = ' ';
-		board_out[out_i++] = board_in[i];
-		if (i + 1 < in_len && out_i + 1 < out_sz) board_out[out_i++] = board_in[i + 1];
+	if (out_i == 0) {
+		snprintf(board_out, out_sz, "(no board)");
+		return;
 	}
 	board_out[out_i] = '\0';
 }
@@ -240,7 +244,7 @@ static void redraw_status(WINDOW *win) {
 
 	flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
 	format_path(path_buf, sizeof(path_buf));
-	format_board_for_status(g_board_str, board_disp, sizeof(board_disp));
+	format_board_for_status(state.board, board_disp, sizeof(board_disp));
 	snprintf(controls, sizeof(controls), " v view   b back   0-5 act  |  wasd move  |  q quit ");
 	werase(win);
 
@@ -286,8 +290,9 @@ static void redraw_status(WINDOW *win) {
 					float p[FLOP_MAX_ACTIONS];
 					char prefix[32];
 					hand_bitmask_to_string(c1[i], c2[i], combo_str, sizeof(combo_str));
-					if (flop_solver_get_hand_strategy(
-						g_current_history, g_fs.board, g_current_num_actions, c1[i] | c2[i], p
+					if (flop_solver_get_hand_strategy_with_runout(
+						g_current_history, g_fs.board, g_fs.preset_turn_card, g_fs.preset_river_card,
+						g_current_num_actions, c1[i] | c2[i], p
 					) == 0) {
 						snprintf(prefix, sizeof(prefix), " %s ", combo_str);
 						draw_action_breakdown_line(win, row++, prefix, state.facing_bet, labels, p, n_actions);
@@ -315,6 +320,7 @@ static void redraw_status(WINDOW *win) {
 }
 
 static int run_tui(const char *oop_path, const char *ip_path, const char *board_str, uint64_t board, int board_cards) {
+	(void)board_str;
 	(void)board;
 	(void)board_cards;
 	initscr();
@@ -339,7 +345,6 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 	g_current_num_actions = 0;
 	g_view_oop = 1;
 	g_solving = 0;
-	snprintf(g_board_str, sizeof(g_board_str), "%s", board_str ? board_str : "(no board)");
 	snprintf(g_oop_name, sizeof(g_oop_name), "%s", oop_path ? oop_path : "OOP");
 	snprintf(g_ip_name, sizeof(g_ip_name), "%s", ip_path ? ip_path : "IP");
 
@@ -427,7 +432,7 @@ int main(int argc, char **argv) {
 		board_str = argv[3];
 	} else if (argc >= 1) {
 		fprintf(stderr, "Usage: %s <oop_range.json> <ip_range.json> <board>\n", argv[0]);
-		fprintf(stderr, "  e.g. %s data/ranges/oop.json data/ranges/ip.json AhKhQd\n", argv[0]);
+		fprintf(stderr, "  e.g. %s data/ranges/oop.json data/ranges/ip.json AhKhQd3c4d\n", argv[0]);
 		return 1;
 	}
 
@@ -449,32 +454,27 @@ int main(int argc, char **argv) {
 	}
 
 	uint64_t board = 0;
+	uint64_t preset_turn_card = 0;
+	uint64_t preset_river_card = 0;
 	int board_cards = 0;
 	if (board_str) {
-		board = range_parse_board(board_str, &board_cards);
-		if (board_cards < 3) {
-			fprintf(stderr, "Board must be at least 3 cards (e.g. AhKhQd)\n");
+		uint64_t ordered_cards[5] = { 0, 0, 0, 0, 0 };
+		if (range_parse_board_cards(board_str, ordered_cards, &board_cards) != 0) {
+			fprintf(stderr, "Invalid board string. Use 3-5 unique cards like AhKhQd3c4d\n");
 			return 1;
 		}
-		/* Use only first 3 for flop */
-		if (board_cards > 3) {
-			uint64_t b3 = 0;
-			int n = 0;
-			for (int r = 0; r < 13 && n < 3; r++) {
-				for (int s = 0; s < 4 && n < 3; s++) {
-					uint64_t card = range_make_card(r, s);
-					if (board & card) {
-						b3 |= card;
-						n++;
-					}
-				}
-			}
-			board = b3;
-			board_cards = 3;
+		if (board_cards < 3 || board_cards > 5) {
+			fprintf(stderr, "Board must contain 3-5 cards (e.g. AhKhQd or AhKhQd3c4d)\n");
+			return 1;
 		}
+		board = ordered_cards[0] | ordered_cards[1] | ordered_cards[2];
+		if (board_cards >= 4)
+			preset_turn_card = ordered_cards[3];
+		if (board_cards >= 5)
+			preset_river_card = ordered_cards[4];
 	}
 
-	flop_solver_set_board(&g_fs, board);
+	flop_solver_set_board_runout(&g_fs, board, preset_turn_card, preset_river_card);
 	flop_solver_set_ranges(&g_fs, oop_grid, ip_grid);
 
 	init_rank_map();

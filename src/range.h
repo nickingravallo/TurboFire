@@ -24,6 +24,8 @@ uint64_t range_parse_card(const char *str);
 
 /* Parse board from string e.g. "AhKhQd" (2 chars per card). Return bitmask; *ncards set. */
 uint64_t range_parse_board(const char *str, int *ncards);
+/* Parse ordered board cards (up to 5). Returns 0 on success, -1 on invalid input. */
+int range_parse_board_cards(const char *str, uint64_t out_cards[5], int *ncards);
 
 /* Generate up to max_combos (c1,c2) bitmask pairs for hand string; board = dead cards.
  * Return number of combos written. Hand must not overlap board. */

@@ -6,49 +6,86 @@
 #include <stdio.h>
 
 #define MAX_COMBOS 12
+#define MAX_RANGE_COMBOS 1326
 
 static uint64_t g_flop_board;
 
-/* Sample a hand (c1|c2) from range grid; board = dead cards. Return hand bitmask (c1|c2). */
-static uint64_t sample_hand_from_range(const float grid[FLOP_GRID_SIZE][FLOP_GRID_SIZE], uint64_t board_dead) {
-	float total = 0.0f;
-	float cum[FLOP_GRID_SIZE][FLOP_GRID_SIZE];
+static void build_weighted_combo_cache(
+	const float grid[FLOP_GRID_SIZE][FLOP_GRID_SIZE],
+	uint64_t dead_cards,
+	uint64_t out_hands[MAX_RANGE_COMBOS],
+	float out_cum_weights[MAX_RANGE_COMBOS],
+	int *out_count,
+	float *out_total_weight
+) {
 	int r, c;
+	int n_out = 0;
+	float total = 0.0f;
 	char hand_str[8];
+	uint64_t c1[MAX_COMBOS], c2[MAX_COMBOS];
+	if (!out_count || !out_total_weight)
+		return;
 	for (r = 0; r < FLOP_GRID_SIZE; r++) {
 		for (c = 0; c < FLOP_GRID_SIZE; c++) {
-			if (grid[r][c] <= 0.0f) { cum[r][c] = total; continue; }
+			float weight = grid[r][c];
+			int n, i;
+			if (weight <= 0.0f)
+				continue;
 			hand_at(r, c, hand_str, sizeof(hand_str));
-			{
-				uint64_t d1[MAX_COMBOS], d2[MAX_COMBOS];
-				int n = hand_string_to_combos(hand_str, board_dead, d1, d2, MAX_COMBOS);
-				if (n <= 0) { cum[r][c] = total; continue; }
-				total += grid[r][c] * (float)n;
-				cum[r][c] = total;
+			n = hand_string_to_combos(hand_str, dead_cards, c1, c2, MAX_COMBOS);
+			if (n <= 0)
+				continue;
+			for (i = 0; i < n && n_out < MAX_RANGE_COMBOS; i++) {
+				out_hands[n_out] = c1[i] | c2[i];
+				total += weight;
+				out_cum_weights[n_out] = total;
+				n_out++;
 			}
 		}
 	}
-	if (total <= 0.0f) return 0;
-	float u = (float)rand() / (float)RAND_MAX * total;
-	for (r = 0; r < FLOP_GRID_SIZE; r++) {
-		for (c = 0; c < FLOP_GRID_SIZE; c++) {
-			if (u >= cum[r][c]) continue;
-			hand_at(r, c, hand_str, sizeof(hand_str));
-			uint64_t c1[MAX_COMBOS], c2[MAX_COMBOS];
-			int n = hand_string_to_combos(hand_str, board_dead, c1, c2, MAX_COMBOS);
-			if (n <= 0) return 0;
-			int idx = rand() % n;
-			return c1[idx] | c2[idx];
-		}
+	*out_count = n_out;
+	*out_total_weight = total;
+}
+
+static uint64_t sample_hand_from_cache(
+	const uint64_t hands[MAX_RANGE_COMBOS],
+	const float cum_weights[MAX_RANGE_COMBOS],
+	int n_hands,
+	float total_weight
+) {
+	int lo, hi;
+	float u;
+	if (n_hands <= 0 || total_weight <= 0.0f)
+		return 0;
+	u = ((float)rand() / (float)RAND_MAX) * total_weight;
+	if (u >= total_weight)
+		u = total_weight * 0.99999994f;
+	lo = 0;
+	hi = n_hands - 1;
+	while (lo < hi) {
+		int mid = lo + (hi - lo) / 2;
+		if (u < cum_weights[mid])
+			hi = mid;
+		else
+			lo = mid + 1;
 	}
-	return 0;
+	return hands[lo];
+}
+
+void flop_solver_set_board_runout(
+	FlopSolver *fs, uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card
+) {
+	if (!fs) return;
+	fs->board = flop_board;
+	fs->preset_turn_card = preset_turn_card;
+	fs->preset_river_card = preset_river_card;
+	fs->combo_cache_valid = 0;
+	fs->solved = 0;
+	fs->iterations_done = 0;
 }
 
 void flop_solver_set_board(FlopSolver *fs, uint64_t board) {
-	if (!fs) return;
-	fs->board = board;
-	fs->solved = 0;
-	fs->iterations_done = 0;
+	flop_solver_set_board_runout(fs, board, 0, 0);
 }
 
 void flop_solver_set_ranges(FlopSolver *fs,
@@ -57,6 +94,7 @@ void flop_solver_set_ranges(FlopSolver *fs,
 	if (!fs) return;
 	memcpy(fs->oop_weights, oop, sizeof(fs->oop_weights));
 	memcpy(fs->ip_weights, ip, sizeof(fs->ip_weights));
+	fs->combo_cache_valid = 0;
 	fs->solved = 0;
 	fs->iterations_done = 0;
 }
@@ -64,35 +102,63 @@ void flop_solver_set_ranges(FlopSolver *fs,
 void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 	if (!fs || n_iterations <= 0) return;
 	g_flop_board = fs->board;
+	if (!fs->combo_cache_valid) {
+		uint64_t dead_cards = fs->board | fs->preset_turn_card | fs->preset_river_card;
+		build_weighted_combo_cache(
+			fs->oop_weights, dead_cards,
+			fs->oop_combo_hands, fs->oop_combo_cum_weights,
+			&fs->oop_combo_count, &fs->oop_combo_total_weight
+		);
+		build_weighted_combo_cache(
+			fs->ip_weights, dead_cards,
+			fs->ip_combo_hands, fs->ip_combo_cum_weights,
+			&fs->ip_combo_count, &fs->ip_combo_total_weight
+		);
+		fs->combo_cache_valid = 1;
+	}
+	if (fs->oop_combo_count <= 0 || fs->ip_combo_count <= 0)
+		return;
 	/* Preserve table across chunked solve calls; reset only at start of a fresh solve. */
 	if (fs->iterations_done == 0)
 		init_gto_table();
 	for (int iter = 0; iter < n_iterations; iter++) {
-		uint64_t p1 = sample_hand_from_range(fs->oop_weights, fs->board);
-		uint64_t p2 = sample_hand_from_range(fs->ip_weights, fs->board);
+		uint64_t p1 = sample_hand_from_cache(
+			fs->oop_combo_hands, fs->oop_combo_cum_weights,
+			fs->oop_combo_count, fs->oop_combo_total_weight
+		);
+		uint64_t p2 = sample_hand_from_cache(
+			fs->ip_combo_hands, fs->ip_combo_cum_weights,
+			fs->ip_combo_count, fs->ip_combo_total_weight
+		);
 		if (!p1 || !p2 || (p1 & p2)) continue;
 		if ((p1 & fs->board) || (p2 & fs->board)) continue;
 		GameState state;
-		gto_init_flop_state(&state, p1, p2, fs->board);
+		gto_init_postflop_state(
+			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
+		);
 		gto_mccfr(state, P1);
-		gto_init_flop_state(&state, p1, p2, fs->board);
+		gto_init_postflop_state(
+			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
+		);
 		gto_mccfr(state, P2);
 	}
 	fs->solved = 1;
 	fs->iterations_done += n_iterations;
 }
 
-int flop_solver_get_hand_strategy(
-	uint64_t history, uint64_t board, int num_actions, uint64_t hole_hand,
-	float probs[FLOP_MAX_ACTIONS]
+int flop_solver_get_hand_strategy_with_runout(
+	uint64_t history, uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card,
+	int num_actions, uint64_t hole_hand, float probs[FLOP_MAX_ACTIONS]
 ) {
 	GameState state;
 	uint8_t legal_actions;
 	float legal_sum = 0.0f;
 	int a;
-	gto_replay_flop_history(history, board, num_actions, &state);
+	gto_replay_postflop_history(
+		history, flop_board, preset_turn_card, preset_river_card, num_actions, &state
+	);
 	InfoSet *node = gto_get_node(make_info_set_key(
-		history, board, hole_hand, state.pot, state.p1_stack, state.p2_stack
+		history, state.board, hole_hand, state.pot, state.p1_stack, state.p2_stack
 	));
 	if (!node) return -1;
 	legal_actions = gto_get_legal_actions(&state);
@@ -112,13 +178,24 @@ int flop_solver_get_hand_strategy(
 	return 0;
 }
 
+int flop_solver_get_hand_strategy(
+	uint64_t history, uint64_t board, int num_actions, uint64_t hole_hand,
+	float probs[FLOP_MAX_ACTIONS]
+) {
+	return flop_solver_get_hand_strategy_with_runout(
+		history, board, 0, 0, num_actions, hole_hand, probs
+	);
+}
+
 int flop_solver_get_oop_strategy(const FlopSolver *fs, int row, int col, float probs[FLOP_MAX_ACTIONS]) {
 	return flop_solver_get_strategy_at_history(fs, 0, 0, row, col, probs, NULL);
 }
 
 void flop_solver_get_state_at_history(const FlopSolver *fs, uint64_t history, int num_actions, GameState *out_state) {
 	if (!fs || !out_state) return;
-	gto_replay_flop_history(history, fs->board, num_actions, out_state);
+	gto_replay_postflop_history(
+		history, fs->board, fs->preset_turn_card, fs->preset_river_card, num_actions, out_state
+	);
 }
 
 int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, int num_actions,
@@ -147,7 +224,9 @@ int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, 
 	for (i = 0; i < n; i++) {
 		uint64_t hand = c1[i] | c2[i];
 		float p[FLOP_MAX_ACTIONS];
-		if (flop_solver_get_hand_strategy(history, fs->board, num_actions, hand, p) == 0) {
+		if (flop_solver_get_hand_strategy_with_runout(
+			history, fs->board, fs->preset_turn_card, fs->preset_river_card, num_actions, hand, p
+		) == 0) {
 			for (a = 0; a < n_actions; a++) sum[a] += p[a];
 			n_seen++;
 		}

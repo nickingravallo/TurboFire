@@ -123,14 +123,19 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 static const int BET_PCT[] = { 0, 33, 52, 75, 100, 123 };
 /* Raise fractions (pot) for IP: 33, 75, 123 */
 static const int RAISE_PCT[] = { 33, 75, 123 };
-/* Keep tree finite to avoid runaway recursion in flop-only game. */
+/* Keep tree finite to avoid runaway recursion in deep lines. */
 #define MAX_RAISES_PER_STREET 2
 
-void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint64_t board) {
+void gto_init_postflop_state(
+	GameState* state, uint64_t p1_hand, uint64_t p2_hand,
+	uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card
+) {
 	memset(state, 0, sizeof(GameState));
 	state->p1_hand = p1_hand;
 	state->p2_hand = p2_hand;
-	state->board = board;
+	state->board = flop_board;
+	state->preset_turn_card = preset_turn_card;
+	state->preset_river_card = preset_river_card;
 	state->pot = STARTING_FLOP_POT_BB;
 	state->to_call = 0.0f;
 	state->p1_stack = STARTING_STACK_BB;
@@ -145,6 +150,10 @@ void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, u
 	state->last_action = 0;
 	state->facing_bet = false;
 	state->is_terminal = false;
+}
+
+void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint64_t board) {
+	gto_init_postflop_state(state, p1_hand, p2_hand, board, 0, 0);
 }
 
 // Check if game state is terminal
@@ -171,12 +180,14 @@ float gto_get_payout(GameState* state, int traverser) {
 	return estimate_showdown_utility(state, traverser);
 }
 
-// Replay flop history (decode action_ids from history and apply; used to get state at a node)
-void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, GameState* out_state) {
+void gto_replay_postflop_history(
+	uint64_t history, uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card,
+	int num_actions, GameState* out_state
+) {
 	GameState s;
 	int i;
 	if (!out_state) return;
-	gto_init_flop_state(&s, 0, 0, board);
+	gto_init_postflop_state(&s, 0, 0, flop_board, preset_turn_card, preset_river_card);
 	if (num_actions <= 0) {
 		*out_state = s;
 		return;
@@ -188,7 +199,12 @@ void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, 
 	*out_state = s;
 }
 
-// Get legal actions at current state (flop: OOP 6 actions, IP facing check 6, IP facing bet 5)
+// Replay flop-only history API retained for compatibility.
+void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, GameState* out_state) {
+	gto_replay_postflop_history(history, board, 0, 0, num_actions, out_state);
+}
+
+// Get legal actions at current state (OOP/IP facing check: 6 actions, facing bet: up to 5 actions)
 uint8_t gto_get_legal_actions(GameState* state) {
 	uint8_t legal_mask = 0;
 	int i;
@@ -198,7 +214,7 @@ uint8_t gto_get_legal_actions(GameState* state) {
 	if (!state)
 		return 0;
 	actor_stack = (state->active_player == P1) ? state->p1_stack : state->p2_stack;
-	if (state->street != STREET_FLOP)
+	if (state->street < STREET_FLOP || state->street > STREET_RIVER)
 		return 0;
 	if (state->facing_bet) {
 		/* Facing bet: Fold(0), Call(1), optional Raise33/75/123 (2..4). */
@@ -250,7 +266,22 @@ uint8_t gto_get_legal_actions(GameState* state) {
 	return legal_mask;
 }
 
-// Apply action and transition to next state (flop action set)
+static void gto_advance_to_next_street(GameState *state) {
+	if (!state) return;
+	state->to_call = 0.0f;
+	if (state->street < STREET_RIVER) {
+		state->street++;
+		state->num_actions_this_street = 0;
+		state->num_raises_this_street = 0;
+		state->active_player = P1;
+		state->last_action = 0;
+		state->facing_bet = false;
+	} else {
+		state->is_terminal = true;
+	}
+}
+
+// Apply action and transition to next state (postflop action set)
 GameState gto_apply_action(GameState state, int action_id) {
 	float desired_bet, desired_raise;
 	float *actor_stack;
@@ -284,8 +315,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 			*actor_contribution += call_commit;
 			state.pot += call_commit;
 			state.to_call = 0.0f;
-			/* Flop-only solver: treat call on flop as terminal (no turn/river). */
-			state.is_terminal = true;
+			gto_advance_to_next_street(&state);
 			return state;
 		}
 		if (action_id >= 2 && action_id <= 4) {
@@ -302,7 +332,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 				*actor_contribution += call_commit;
 				state.pot += call_commit;
 				state.to_call = 0.0f;
-				state.is_terminal = true;
+				gto_advance_to_next_street(&state);
 				return state;
 			}
 			*actor_stack -= actor_commit;
@@ -321,19 +351,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 	/* OOP or IP facing check: 0=Check, 1..5=Bet33..Bet123 */
 	if (action_id == 0) {
 		if (state.num_actions_this_street >= 2) {
-			/* Flop-only solver: check-check on flop is terminal (no turn/river). */
-			if (state.street == STREET_FLOP) {
-				state.is_terminal = true;
-			} else if (state.street < STREET_RIVER) {
-				state.street++;
-				state.num_actions_this_street = 0;
-				state.num_raises_this_street = 0;
-				state.active_player = P1;
-				state.last_action = 0;
-				state.facing_bet = false;
-			} else {
-				state.is_terminal = true;
-			}
+			gto_advance_to_next_street(&state);
 		} else {
 			state.active_player = 1 - state.active_player;
 			state.facing_bet = false;
@@ -560,23 +578,39 @@ float gto_mccfr(GameState state, int traverser) {
 	if (is_terminal_state(&state))
 		return gto_get_payout(&state, traverser);
 	
-	// Chance node - deal board cards
+	// Chance node - deal missing board cards for current street.
 	int cards_needed = 0;
-	if (state.street == STREET_FLOP && __builtin_popcountll(state.board) == 0)
-		cards_needed = 3;  // Need flop
-	else if (state.street == STREET_TURN && __builtin_popcountll(state.board) == 3)
-		cards_needed = 1;  // Need turn
-	else if (state.street == STREET_RIVER && __builtin_popcountll(state.board) == 4)
-		cards_needed = 1;  // Need river
+	int n_board = __builtin_popcountll(state.board);
+	if (state.street == STREET_FLOP && n_board < 3)
+		cards_needed = 3 - n_board;
+	else if (state.street == STREET_TURN && n_board < 4)
+		cards_needed = 4 - n_board;
+	else if (state.street == STREET_RIVER && n_board < 5)
+		cards_needed = 5 - n_board;
 	
 	if (cards_needed > 0) {
 		GameState next_state = state;
 		for (int i = 0; i < cards_needed; i++) {
-			uint64_t new_card = deal_board_card(next_state);
+			uint64_t new_card = 0;
+			if (next_state.street == STREET_TURN &&
+				__builtin_popcountll(next_state.board) == 3 &&
+				next_state.preset_turn_card &&
+				((next_state.board | next_state.p1_hand | next_state.p2_hand) & next_state.preset_turn_card) == 0) {
+				new_card = next_state.preset_turn_card;
+			} else if (next_state.street == STREET_RIVER &&
+				__builtin_popcountll(next_state.board) == 4 &&
+				next_state.preset_river_card &&
+				((next_state.board | next_state.p1_hand | next_state.p2_hand) & next_state.preset_river_card) == 0) {
+				new_card = next_state.preset_river_card;
+			} else {
+				new_card = deal_board_card(next_state);
+			}
+			if (!new_card) {
+				next_state.is_terminal = true;
+				break;
+			}
 			next_state.board |= new_card;
 		}
-		next_state.num_actions_this_street = 0;
-		next_state.num_raises_this_street = 0;
 		return gto_mccfr(next_state, traverser);
 	}
 	

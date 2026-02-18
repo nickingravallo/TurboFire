@@ -13,12 +13,28 @@
 typedef struct {
 	float oop_weights[FLOP_GRID_SIZE][FLOP_GRID_SIZE];
 	float ip_weights[FLOP_GRID_SIZE][FLOP_GRID_SIZE];
-	uint64_t board;           /* 3 cards for flop */
+	uint64_t board;           /* Visible flop cards */
+	uint64_t preset_turn_card;  /* Optional fixed turn card */
+	uint64_t preset_river_card; /* Optional fixed river card */
+	uint64_t oop_combo_hands[1326];
+	uint64_t ip_combo_hands[1326];
+	float oop_combo_cum_weights[1326];
+	float ip_combo_cum_weights[1326];
+	float oop_combo_total_weight;
+	float ip_combo_total_weight;
+	int oop_combo_count;
+	int ip_combo_count;
+	int combo_cache_valid;
 	int solved;               /* 1 after solve() */
 	int iterations_done;
 } FlopSolver;
 
-/* Set board (3 cards bitmask). Clears solved state. */
+/* Set visible flop board and optional fixed turn/river cards. Clears solved state. */
+void flop_solver_set_board_runout(
+	FlopSolver *fs, uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card
+);
+
+/* Compatibility: set only visible flop board. */
 void flop_solver_set_board(FlopSolver *fs, uint64_t board);
 
 /* Set OOP and IP range grids (weights 0..1). Clears solved state. */
@@ -37,8 +53,12 @@ int flop_solver_get_hand_strategy(
 	uint64_t history, uint64_t board, int num_actions, uint64_t hole_hand,
 	float probs[FLOP_MAX_ACTIONS]
 );
+int flop_solver_get_hand_strategy_with_runout(
+	uint64_t history, uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card,
+	int num_actions, uint64_t hole_hand, float probs[FLOP_MAX_ACTIONS]
+);
 
-/* Replay flop history and fill state. Use to get active_player and legal_actions at a node. */
+/* Replay postflop history and fill state. Use to get active_player and legal_actions at a node. */
 void flop_solver_get_state_at_history(const FlopSolver *fs, uint64_t history, int num_actions, GameState *out_state);
 
 /* Get strategy at history for (row,col) for whoever acts at that node. Fills probs[], sets *num_actions to 6 or 5. Return 0 if ok. */

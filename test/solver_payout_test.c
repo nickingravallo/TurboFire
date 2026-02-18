@@ -141,6 +141,95 @@ static int test_exact_turn_enumeration(void) {
 	return almost_equal(gto_get_payout(&s, P1), expected, 1e-6f);
 }
 
+static int test_call_advances_to_next_street(void) {
+	GameState s;
+	int nc = 0;
+	uint64_t flop = range_parse_board("AhKhQd", &nc);
+	uint64_t turn = range_parse_card("3c");
+	uint64_t river = range_parse_card("4d");
+	if (nc != 3 || !turn || !river) return 0;
+	gto_init_postflop_state(&s, 0, 0, flop, turn, river);
+	s.facing_bet = true;
+	s.active_player = P2;
+	s.to_call = 2.0f;
+	s.p2_stack = 50.0f;
+	s.p2_contribution = 3.0f;
+	s.pot = 10.0f;
+	s = gto_apply_action(s, ACTION_CALL);
+	if (s.is_terminal) return 0;
+	if (s.street != STREET_TURN) return 0;
+	if (s.active_player != P1) return 0;
+	if (s.facing_bet) return 0;
+	if (s.to_call != 0.0f) return 0;
+	if (__builtin_popcountll(s.board) != 3) return 0;
+	return 1;
+}
+
+static int test_check_check_progress_and_river_terminal(void) {
+	GameState s;
+	int nc = 0;
+	uint64_t flop = range_parse_board("AhKhQd", &nc);
+	if (nc != 3) return 0;
+	gto_init_postflop_state(&s, 0, 0, flop, 0, 0);
+
+	s = gto_apply_action(s, ACTION_CHECK); /* P1 checks */
+	if (s.is_terminal) return 0;
+	if (s.street != STREET_FLOP) return 0;
+	s = gto_apply_action(s, ACTION_CHECK); /* P2 checks back */
+	if (s.is_terminal) return 0;
+	if (s.street != STREET_TURN) return 0;
+	if (s.active_player != P1) return 0;
+
+	s.street = STREET_RIVER;
+	s.num_actions_this_street = 0;
+	s.num_raises_this_street = 0;
+	s.facing_bet = false;
+	s.active_player = P1;
+	s = gto_apply_action(s, ACTION_CHECK);
+	if (s.is_terminal) return 0;
+	s = gto_apply_action(s, ACTION_CHECK);
+	if (!s.is_terminal) return 0;
+	return 1;
+}
+
+static int test_preset_turn_revealed_in_chance_node(void) {
+	GameState s;
+	int nc = 0;
+	uint64_t flop = range_parse_board("AhKhQd", &nc);
+	uint64_t turn = range_parse_card("3c");
+	uint64_t p1 = range_parse_card("As") | range_parse_card("Ad");
+	uint64_t p2 = range_parse_card("Kc") | range_parse_card("Kd");
+	InfoSet *node;
+	uint64_t key;
+	if (nc != 3 || !turn || !p1 || !p2) return 0;
+	gto_init_postflop_state(&s, p1, p2, flop, turn, 0);
+	s.street = STREET_TURN;
+	init_gto_table();
+	(void)gto_mccfr(s, P1);
+	key = make_info_set_key(s.history, flop | turn, p1, s.pot, s.p1_stack, s.p2_stack);
+	node = gto_get_node(key);
+	return node != NULL;
+}
+
+static int test_preset_river_revealed_in_chance_node(void) {
+	GameState s;
+	int nc = 0;
+	uint64_t turn_board = range_parse_board("AhKhQd3c", &nc);
+	uint64_t river = range_parse_card("4d");
+	uint64_t p1 = range_parse_card("As") | range_parse_card("Ad");
+	uint64_t p2 = range_parse_card("Kc") | range_parse_card("Kd");
+	InfoSet *node;
+	uint64_t key;
+	if (nc != 4 || !river || !p1 || !p2) return 0;
+	gto_init_postflop_state(&s, p1, p2, turn_board, 0, river);
+	s.street = STREET_RIVER;
+	init_gto_table();
+	(void)gto_mccfr(s, P1);
+	key = make_info_set_key(s.history, turn_board | river, p1, s.pot, s.p1_stack, s.p2_stack);
+	node = gto_get_node(key);
+	return node != NULL;
+}
+
 int main(void) {
 	int ok = 1;
 	init_rank_map();
@@ -150,6 +239,10 @@ int main(void) {
 	ok &= test_full_board_showdown();
 	ok &= test_exact_flop_enumeration();
 	ok &= test_exact_turn_enumeration();
+	ok &= test_call_advances_to_next_street();
+	ok &= test_check_check_progress_and_river_terminal();
+	ok &= test_preset_turn_revealed_in_chance_node();
+	ok &= test_preset_river_revealed_in_chance_node();
 
 	if (!ok) {
 		printf("[!] solver_payout_test failed\n");

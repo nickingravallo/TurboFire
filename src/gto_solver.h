@@ -53,6 +53,8 @@ typedef struct {
 	uint64_t p1_hand;           // Player 1 hole cards (bitmask)
 	uint64_t p2_hand;           // Player 2 hole cards (bitmask)
 	uint64_t board;             // Board cards (bitmask)
+	uint64_t preset_turn_card;  // Optional fixed turn card revealed when street advances to turn
+	uint64_t preset_river_card; // Optional fixed river card revealed when street advances to river
 	uint8_t street;             // Current street (preflop/flop/turn/river)
 	uint8_t active_player;      // P1 or P2
 	uint8_t num_actions_this_street;
@@ -90,12 +92,20 @@ InfoSet* gto_get_node(uint64_t key);  /* lookup only; NULL if not found */
 // Game state management
 void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand);
 void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint64_t board);
+void gto_init_postflop_state(
+	GameState* state, uint64_t p1_hand, uint64_t p2_hand,
+	uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card
+);
 bool is_terminal_state(GameState* state);
 float gto_get_payout(GameState* state, int traverser);
 uint8_t gto_get_legal_actions(GameState* state);
 GameState gto_apply_action(GameState state, int action_id);
-// Replay flop history from start; inits state with p1=0,p2=0,board, then applies num_actions from history.
+// Replay flop history from start; compatibility wrapper around postflop replay with no preset cards.
 void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, GameState* out_state);
+void gto_replay_postflop_history(
+	uint64_t history, uint64_t flop_board, uint64_t preset_turn_card, uint64_t preset_river_card,
+	int num_actions, GameState* out_state
+);
 
 // MCCFR algorithm
 void gto_get_strategy(float* regret, float* out_strategy, uint8_t legal_actions);
