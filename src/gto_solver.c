@@ -24,16 +24,38 @@ uint64_t hash_key(uint64_t key) {
 }
 
 // Create hash key from game state and player's private cards
-uint64_t make_info_set_key(uint64_t history, uint64_t board, uint64_t private_hand) {
-	uint64_t key = 0;
-	
-	// Encode private hand (low 64 bits)
-	key |= private_hand;
-	// Encode board (next 64 bits, but we'll use a simpler encoding)
-	// For now, use a hash of the board combined with history
-	key ^= board;
-	key ^= history << 32;
-	
+static uint64_t mix64(uint64_t h, uint64_t v) {
+	h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+	return h;
+}
+
+static float estimate_showdown_utility(const GameState *state, int traverser);
+
+static uint64_t quantize_cents(float value) {
+	if (value <= 0.0f) return 0ULL;
+	return (uint64_t)(value * 100.0f + 0.5f);
+}
+
+static int seen_commit(const uint64_t seen_values[], int seen_count, uint64_t commit_cents) {
+	int i;
+	for (i = 0; i < seen_count; i++) {
+		if (seen_values[i] == commit_cents)
+			return 1;
+	}
+	return 0;
+}
+
+uint64_t make_info_set_key(
+	uint64_t history, uint64_t board, uint64_t private_hand,
+	float pot, float p1_stack, float p2_stack
+) {
+	uint64_t key = 0xcbf29ce484222325ULL;
+	key = mix64(key, private_hand);
+	key = mix64(key, board);
+	key = mix64(key, history);
+	key = mix64(key, quantize_cents(pot));
+	key = mix64(key, quantize_cents(p1_stack));
+	key = mix64(key, quantize_cents(p2_stack));
 	return key;
 }
 
@@ -83,6 +105,8 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 	state->board = 0;
 	state->pot = 1.5f;  // SB + BB
 	state->to_call = 0.0f;
+	state->p1_stack = STARTING_STACK_BB;
+	state->p2_stack = STARTING_STACK_BB;
 	state->street = STREET_PREFLOP;
 	state->active_player = P1;
 	state->num_actions_this_street = 0;
@@ -105,8 +129,10 @@ void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, u
 	state->p1_hand = p1_hand;
 	state->p2_hand = p2_hand;
 	state->board = board;
-	state->pot = 1.5f;
+	state->pot = STARTING_FLOP_POT_BB;
 	state->to_call = 0.0f;
+	state->p1_stack = STARTING_STACK_BB;
+	state->p2_stack = STARTING_STACK_BB;
 	state->street = STREET_FLOP;
 	state->active_player = P1;
 	state->num_actions_this_street = 0;
@@ -126,35 +152,13 @@ bool is_terminal_state(GameState* state) {
 
 // Calculate terminal payouts using hand evaluation
 float gto_get_payout(GameState* state, int traverser) {
-	int opponent;
-	uint64_t traverser_hand, opponent_hand;
-	int traverser_strength, opponent_strength;
-	
 	// Fold case: last_action 0 when facing_bet meant Fold; folder is active_player (they just acted)
 	if (state->is_terminal && state->last_action == 0 && state->facing_bet) {
 		return (state->active_player == traverser) ? -(state->pot / 2.0f) : (state->pot / 2.0f);
 	}
-	
-	// Showdown - use evaluate() from ranks.h (expects 2 hole + 5 board = 7 cards)
-	if (__builtin_popcount(state->board) != 5) {
-		/* Avoid calling evaluate with < 7 cards; ranks.c canonicalize_hand assumes 7. */
-		return 0.0f;
-	}
-	opponent = 1 - traverser;
-	traverser_hand = (traverser == P1) ? state->p1_hand : state->p2_hand;
-	opponent_hand = (opponent == P1) ? state->p1_hand : state->p2_hand;
-	
-	traverser_strength = evaluate(traverser_hand, state->board);
-	opponent_strength = evaluate(opponent_hand, state->board);
-	
-	// Higher strength wins (ranks.c returns higher values for better hands)
-	if (traverser_strength > opponent_strength)
-		return state->pot / 2.0f;
-	if (traverser_strength < opponent_strength)
-		return -(state->pot / 2.0f);
-	
-	// Chop pot
-	return 0.0f;
+
+	// Showdown: if turn/river are missing (flop-only tree), estimate utility by rollouts.
+	return estimate_showdown_utility(state, traverser);
 }
 
 // Replay flop history (decode action_ids from history and apply; used to get state at a node)
@@ -178,27 +182,71 @@ void gto_replay_flop_history(uint64_t history, uint64_t board, int num_actions, 
 uint8_t gto_get_legal_actions(GameState* state) {
 	uint8_t legal_mask = 0;
 	int i;
+	float actor_stack;
+	uint64_t seen_values[6];
+	int seen_count = 0;
+	if (!state)
+		return 0;
+	actor_stack = (state->active_player == P1) ? state->p1_stack : state->p2_stack;
 	if (state->street != STREET_FLOP)
 		return 0;
 	if (state->facing_bet) {
 		/* Facing bet: Fold(0), Call(1), optional Raise33/75/123 (2..4). */
 		legal_mask |= (1u << 0);
-		legal_mask |= (1u << 1);
+		if (actor_stack > 0.0f)
+			legal_mask |= (1u << 1);
+		/* Track unique total commits in cents to avoid duplicated all-in branches. */
+		{
+			float call_commit = (state->to_call < actor_stack) ? state->to_call : actor_stack;
+			uint64_t call_cents = quantize_cents(call_commit);
+			seen_values[seen_count++] = call_cents;
+		}
 		if (state->num_raises_this_street < MAX_RAISES_PER_STREET) {
-			for (i = 2; i <= 4; i++)
+			for (i = 2; i <= 4; i++) {
+				float desired_raise = state->pot * (float)RAISE_PCT[i - 2] / 100.0f;
+				float total_commit = state->to_call + desired_raise;
+				if (total_commit > actor_stack)
+					total_commit = actor_stack;
+				if (total_commit <= state->to_call)
+					continue;
+				{
+					uint64_t commit_cents = quantize_cents(total_commit);
+					if (seen_commit(seen_values, seen_count, commit_cents))
+						continue;
+					if (seen_count < 6)
+						seen_values[seen_count++] = commit_cents;
+				}
 				legal_mask |= (1u << i);
+			}
 		}
 		return legal_mask;
 	}
 	/* OOP first node or IP facing check: Check(0), Bet33(1), Bet52(2), Bet75(3), Bet100(4), Bet123(5) */
-	for (i = 0; i <= 5; i++)
+	legal_mask |= (1u << 0);
+	for (i = 1; i <= 5; i++) {
+		float desired_bet = state->pot * (float)BET_PCT[i] / 100.0f;
+		float commit = (desired_bet < actor_stack) ? desired_bet : actor_stack;
+		if (commit <= 0.0f)
+			continue;
+		{
+			uint64_t commit_cents = quantize_cents(commit);
+			if (seen_commit(seen_values, seen_count, commit_cents))
+				continue;
+			if (seen_count < 6)
+				seen_values[seen_count++] = commit_cents;
+		}
 		legal_mask |= (1u << i);
+	}
 	return legal_mask;
 }
 
 // Apply action and transition to next state (flop action set)
 GameState gto_apply_action(GameState state, int action_id) {
-	float bet_size, raise_size;
+	float desired_bet, desired_raise;
+	float *actor_stack;
+	float actor_commit;
+	float call_commit;
+	float previous_to_call;
 	/* Prevent undefined shifts in history encoding and bound recursion depth. */
 	if (state.num_actions_total >= MAX_HISTORY) {
 		state.is_terminal = true;
@@ -209,6 +257,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 	state.last_action = (uint8_t)(action_id & 0xFF);
 	state.num_actions_this_street++;
 	state.num_actions_total++;
+	actor_stack = (state.active_player == P1) ? &state.p1_stack : &state.p2_stack;
 
 	if (state.facing_bet) {
 		/* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123 */
@@ -217,16 +266,35 @@ GameState gto_apply_action(GameState state, int action_id) {
 			return state;
 		}
 		if (action_id == 1) {
-			state.pot += state.to_call;
+			call_commit = (state.to_call < *actor_stack) ? state.to_call : *actor_stack;
+			*actor_stack -= call_commit;
+			if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+			state.pot += call_commit;
 			state.to_call = 0.0f;
 			/* Flop-only solver: treat call on flop as terminal (no turn/river). */
 			state.is_terminal = true;
 			return state;
 		}
 		if (action_id >= 2 && action_id <= 4) {
-			raise_size = state.pot * (float)RAISE_PCT[action_id - 2] / 100.0f;
-			state.pot += state.to_call + raise_size;
-			state.to_call = raise_size;
+			previous_to_call = state.to_call;
+			desired_raise = state.pot * (float)RAISE_PCT[action_id - 2] / 100.0f;
+			actor_commit = previous_to_call + desired_raise;
+			if (actor_commit > *actor_stack)
+				actor_commit = *actor_stack;
+			if (actor_commit <= previous_to_call) {
+				/* Cannot produce a valid raise; treat as a call-sized commit. */
+				call_commit = (previous_to_call < *actor_stack) ? previous_to_call : *actor_stack;
+				*actor_stack -= call_commit;
+				if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+				state.pot += call_commit;
+				state.to_call = 0.0f;
+				state.is_terminal = true;
+				return state;
+			}
+			*actor_stack -= actor_commit;
+			if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+			state.pot += actor_commit;
+			state.to_call = actor_commit - previous_to_call;
 			state.num_raises_this_street++;
 			/* After a raise, action passes back to the other player. */
 			state.active_player = (uint8_t)(1 - state.active_player);
@@ -258,9 +326,14 @@ GameState gto_apply_action(GameState state, int action_id) {
 		return state;
 	}
 	if (action_id >= 1 && action_id <= 5) {
-		bet_size = state.pot * (float)BET_PCT[action_id] / 100.0f;
-		state.pot += bet_size;
-		state.to_call = bet_size;
+		desired_bet = state.pot * (float)BET_PCT[action_id] / 100.0f;
+		actor_commit = (desired_bet < *actor_stack) ? desired_bet : *actor_stack;
+		if (actor_commit <= 0.0f)
+			return state;
+		*actor_stack -= actor_commit;
+		if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+		state.pot += actor_commit;
+		state.to_call = actor_commit;
 		state.num_raises_this_street++;
 		state.active_player = 1 - state.active_player;
 		state.facing_bet = true;
@@ -337,6 +410,69 @@ static uint64_t make_card(int rank, int suit) {
 	return 1ULL << (rank + suit * 16);
 }
 
+/* Pick one uniformly random unused card bitmask. Returns 0 on failure. */
+static uint64_t sample_unused_card(uint64_t used_cards) {
+	uint64_t candidates[52];
+	int n = 0;
+	for (int rank = 0; rank < 13; rank++) {
+		for (int suit = 0; suit < 4; suit++) {
+			uint64_t card = make_card(rank, suit);
+			if ((used_cards & card) == 0)
+				candidates[n++] = card;
+		}
+	}
+	if (n <= 0)
+		return 0;
+	return candidates[rand() % n];
+}
+
+/*
+ * Estimate showdown utility when the board has fewer than 5 cards by rolling
+ * out random remaining public cards.
+ */
+static float estimate_showdown_utility(const GameState *state, int traverser) {
+	const int n_board = __builtin_popcountll(state->board);
+	const int cards_needed = 5 - n_board;
+	const int rollout_samples = 64;
+	int wins = 0;
+	int losses = 0;
+	if (cards_needed <= 0) {
+		uint64_t traverser_hand = (traverser == P1) ? state->p1_hand : state->p2_hand;
+		uint64_t opponent_hand = (traverser == P1) ? state->p2_hand : state->p1_hand;
+		int traverser_strength = evaluate(traverser_hand, state->board);
+		int opponent_strength = evaluate(opponent_hand, state->board);
+		if (traverser_strength > opponent_strength)
+			return state->pot / 2.0f;
+		if (traverser_strength < opponent_strength)
+			return -(state->pot / 2.0f);
+		return 0.0f;
+	}
+
+	for (int s = 0; s < rollout_samples; s++) {
+		uint64_t board_full = state->board;
+		uint64_t used = state->board | state->p1_hand | state->p2_hand;
+		for (int k = 0; k < cards_needed; k++) {
+			uint64_t card = sample_unused_card(used);
+			if (!card)
+				break; /* Invalid state; treat missing rollouts as chops. */
+			used |= card;
+			board_full |= card;
+		}
+		{
+			uint64_t traverser_hand = (traverser == P1) ? state->p1_hand : state->p2_hand;
+			uint64_t opponent_hand = (traverser == P1) ? state->p2_hand : state->p1_hand;
+			int traverser_strength = evaluate(traverser_hand, board_full);
+			int opponent_strength = evaluate(opponent_hand, board_full);
+			if (traverser_strength > opponent_strength)
+				wins++;
+			else if (traverser_strength < opponent_strength)
+				losses++;
+		}
+	}
+
+	return ((float)(wins - losses) / (float)rollout_samples) * (state->pot / 2.0f);
+}
+
 // Deal a random board card that doesn't conflict with hole cards or existing board
 uint64_t deal_board_card(GameState state) {
 	uint64_t used_cards;
@@ -385,11 +521,11 @@ float gto_mccfr(GameState state, int traverser) {
 	
 	// Chance node - deal board cards
 	int cards_needed = 0;
-	if (state.street == STREET_FLOP && __builtin_popcount(state.board) == 0)
+	if (state.street == STREET_FLOP && __builtin_popcountll(state.board) == 0)
 		cards_needed = 3;  // Need flop
-	else if (state.street == STREET_TURN && __builtin_popcount(state.board) == 3)
+	else if (state.street == STREET_TURN && __builtin_popcountll(state.board) == 3)
 		cards_needed = 1;  // Need turn
-	else if (state.street == STREET_RIVER && __builtin_popcount(state.board) == 4)
+	else if (state.street == STREET_RIVER && __builtin_popcountll(state.board) == 4)
 		cards_needed = 1;  // Need river
 	
 	if (cards_needed > 0) {
@@ -405,7 +541,9 @@ float gto_mccfr(GameState state, int traverser) {
 	
 	// Player node - get information set
 	active_hand = (state.active_player == P1) ? state.p1_hand : state.p2_hand;
-	node = gto_get_or_create_node(make_info_set_key(state.history, state.board, active_hand));
+	node = gto_get_or_create_node(make_info_set_key(
+		state.history, state.board, active_hand, state.pot, state.p1_stack, state.p2_stack
+	));
 	if (!node)
 		return 0.0f;  /* table full */
 	legal_actions = gto_get_legal_actions(&state);

@@ -10,6 +10,8 @@
 #define MAX_HISTORY    100
 #define TABLE_SIZE     1000003
 #define EMPTY_MAGIC    0xBEEFBEEF
+#define STARTING_FLOP_POT_BB 6.0f
+#define STARTING_STACK_BB 97.0f
 
 /* Action IDs: OOP / IP facing check use 0=Check, 1=Bet33, 2=Bet52, 3=Bet75, 4=Bet100, 5=Bet123.
  * IP facing bet uses 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123. */
@@ -44,6 +46,8 @@ typedef struct {
 	uint64_t history;           // Action history (BITS_PER_ACTION bits per action_id)
 	float pot;                  // Current pot size
 	float to_call;              // Amount current player must call (0 if no bet)
+	float p1_stack;             // Remaining stack for OOP (P1)
+	float p2_stack;             // Remaining stack for IP (P2)
 	uint64_t p1_hand;           // Player 1 hole cards (bitmask)
 	uint64_t p2_hand;           // Player 2 hole cards (bitmask)
 	uint64_t board;             // Board cards (bitmask)
@@ -74,7 +78,10 @@ extern HashTable gto_table[TABLE_SIZE];
 // Hash table management
 void init_gto_table(void);
 uint64_t hash_key(uint64_t key);
-uint64_t make_info_set_key(uint64_t history, uint64_t board, uint64_t private_hand);
+uint64_t make_info_set_key(
+	uint64_t history, uint64_t board, uint64_t private_hand,
+	float pot, float p1_stack, float p2_stack
+);
 InfoSet* gto_get_or_create_node(uint64_t key);
 InfoSet* gto_get_node(uint64_t key);  /* lookup only; NULL if not found */
 

@@ -32,8 +32,11 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations);
 /* Get OOP strategy at start of flop (history=0) for hand (row,col). Fills probs[0..5] = Check, Bet33..Bet123. Return 0 if ok. */
 int flop_solver_get_oop_strategy(const FlopSolver *fs, int row, int col, float probs[FLOP_MAX_ACTIONS]);
 
-/* Get strategy for a specific hole hand (bitmask) at history and board. probs[] has FLOP_MAX_ACTIONS; only first N valid per node. */
-int flop_solver_get_hand_strategy(uint64_t history, uint64_t board, uint64_t hole_hand, float probs[FLOP_MAX_ACTIONS]);
+/* Get strategy for a specific hole hand (bitmask) at history/num_actions and board. */
+int flop_solver_get_hand_strategy(
+	uint64_t history, uint64_t board, int num_actions, uint64_t hole_hand,
+	float probs[FLOP_MAX_ACTIONS]
+);
 
 /* Replay flop history and fill state. Use to get active_player and legal_actions at a node. */
 void flop_solver_get_state_at_history(const FlopSolver *fs, uint64_t history, int num_actions, GameState *out_state);

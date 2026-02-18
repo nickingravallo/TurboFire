@@ -17,8 +17,6 @@
 #define BOARD_STR_LEN 32
 #define MAX_COMBOS 12
 #define STATUS_ROWS 6
-#define STARTING_FLOP_POT_BB 6.0f
-#define STARTING_STACK_BB 97.0f
 static const char SUITS[] = "shdc";  /* suit 0=S, 1=H, 2=D, 3=C */
 
 /* OOP action labels (6): Check, Bet33, Bet52, Bet75, Bet100, Bet123 */
@@ -37,15 +35,6 @@ static char g_ip_name[64];
 static int g_solving;
 static int g_iterations = 50000;
 static int g_has_colors;
-
-typedef struct {
-	float pot;
-	float to_call;
-	float oop_stack;
-	float ip_stack;
-	int active_player;
-	int facing_bet;
-} DisplayPotState;
 
 /* Decode one card bitmask into rank (0-12) and suit (0-3). Return 0 if invalid. */
 static int card_to_rank_suit(uint64_t card, int *out_rank, int *out_suit) {
@@ -84,6 +73,31 @@ static void print_line_clipped(WINDOW *win, int row, const char *text) {
 	waddnstr(win, text, w - 1);
 }
 
+/* Render compact board string (e.g. "Kd7h2s") as spaced cards ("Kd 7h 2s"). */
+static void format_board_for_status(const char *board_in, char *board_out, size_t out_sz) {
+	size_t in_len;
+	size_t out_i = 0;
+
+	if (!board_out || out_sz == 0) return;
+	if (!board_in) {
+		snprintf(board_out, out_sz, "(no board)");
+		return;
+	}
+
+	in_len = strlen(board_in);
+	if (in_len < 2) {
+		snprintf(board_out, out_sz, "%s", board_in);
+		return;
+	}
+
+	for (size_t i = 0; i < in_len && out_i + 1 < out_sz; i += 2) {
+		if (i > 0 && out_i + 1 < out_sz) board_out[out_i++] = ' ';
+		board_out[out_i++] = board_in[i];
+		if (i + 1 < in_len && out_i + 1 < out_sz) board_out[out_i++] = board_in[i + 1];
+	}
+	board_out[out_i] = '\0';
+}
+
 static int action_color_pair(int facing_bet, int action_idx) {
 	if (facing_bet) {
 		/* Fold red, call green, raises yellow. */
@@ -120,86 +134,13 @@ static void draw_action_breakdown_line(
 	}
 	for (int j = 0; j < n_actions && x < w - 1; j++) {
 		char chunk[32];
-		int n = snprintf(chunk, sizeof(chunk), "%s%.1f%% ", labels[j], probs[j] * 100.0f);
+		int n = snprintf(chunk, sizeof(chunk), "%-7s %5.1f%%   ", labels[j], probs[j] * 100.0f);
 		if (n <= 0) continue;
 		if (g_has_colors) wattron(win, COLOR_PAIR(action_color_pair(facing_bet, j)) | A_BOLD);
 		mvwaddnstr(win, row, x, chunk, w - 1 - x);
 		if (g_has_colors) wattroff(win, COLOR_PAIR(action_color_pair(facing_bet, j)) | A_BOLD);
 		x += n;
 	}
-}
-
-static int decode_history_action(uint64_t history, int idx) {
-	if (idx < 0) return 0;
-	return (int)((history >> (idx * 3)) & 7u);
-}
-
-static void compute_display_pot_state(uint64_t history, int num_actions, DisplayPotState *out) {
-	static const float BET_FRAC[] = { 0.0f, 0.33f, 0.52f, 0.75f, 1.00f, 1.23f };
-	static const float RAISE_FRAC[] = { 0.33f, 0.75f, 1.23f }; /* action ids 2..4 */
-	int active = P1;
-	int facing_bet = 0;
-	float pot = STARTING_FLOP_POT_BB;
-	float to_call = 0.0f;
-	float oop_stack = STARTING_STACK_BB;
-	float ip_stack = STARTING_STACK_BB;
-
-	if (!out) return;
-
-	for (int i = 0; i < num_actions; i++) {
-		int a = decode_history_action(history, i);
-		float *actor_stack = (active == P1) ? &oop_stack : &ip_stack;
-
-		if (facing_bet) {
-			if (a == ACTION_FOLD) {
-				active = (active == P1) ? P2 : P1;
-				facing_bet = 0;
-				to_call = 0.0f;
-				break;
-			}
-			if (a == ACTION_CALL) {
-				*actor_stack -= to_call;
-				if (*actor_stack < 0.0f) *actor_stack = 0.0f;
-				pot += to_call;
-				to_call = 0.0f;
-				facing_bet = 0;
-				active = (active == P1) ? P2 : P1;
-				continue;
-			}
-			if (a >= ACTION_RAISE_33 && a <= ACTION_RAISE_123) {
-				float raise = pot * RAISE_FRAC[a - ACTION_RAISE_33];
-				*actor_stack -= (to_call + raise);
-				if (*actor_stack < 0.0f) *actor_stack = 0.0f;
-				pot += to_call + raise;
-				to_call = raise;
-				facing_bet = 1;
-				active = (active == P1) ? P2 : P1;
-				continue;
-			}
-			continue;
-		}
-
-		if (a == ACTION_CHECK) {
-			active = (active == P1) ? P2 : P1;
-			continue;
-		}
-		if (a >= ACTION_BET_33 && a <= ACTION_BET_123) {
-			float bet = pot * BET_FRAC[a];
-			*actor_stack -= bet;
-			if (*actor_stack < 0.0f) *actor_stack = 0.0f;
-			pot += bet;
-			to_call = bet;
-			facing_bet = 1;
-			active = (active == P1) ? P2 : P1;
-		}
-	}
-
-	out->pot = pot;
-	out->to_call = to_call;
-	out->oop_stack = oop_stack;
-	out->ip_stack = ip_stack;
-	out->active_player = active;
-	out->facing_bet = facing_bet;
 }
 
 static void redraw_grid(WINDOW *win) {
@@ -230,7 +171,7 @@ static void redraw_grid(WINDOW *win) {
 
 			if (is_cursor) {
 				wattron(win, A_REVERSE | A_BOLD);
-				wprintw(win, "%3s", hand_str);
+				wprintw(win, "%-3s ", hand_str);
 				wattroff(win, A_REVERSE | A_BOLD);
 			} else if (in_range && g_fs.solved && viewing_acting &&
 				flop_solver_get_strategy_at_history(&g_fs, g_current_history, g_current_num_actions, r, c, probs, &n_actions) == 0) {
@@ -246,12 +187,12 @@ static void redraw_grid(WINDOW *win) {
 					if (best == 0) wattron(win, COLOR_PAIR(3));
 					else wattron(win, COLOR_PAIR(4));
 				}
-				wprintw(win, "%3s", hand_str);
+				wprintw(win, "%-3s ", hand_str);
 				wattrset(win, A_NORMAL);
 			} else if (in_range) {
-				wprintw(win, "%3s", hand_str);
+				wprintw(win, "%-3s ", hand_str);
 			} else {
-				wprintw(win, "%3s", hand_str);
+				wprintw(win, "%-3s ", hand_str);
 			}
 		}
 		wprintw(win, "\n");
@@ -275,11 +216,11 @@ static void redraw_status(WINDOW *win) {
 	char line1[STATUS_LEN];
 	char controls[STATUS_LEN];
 	char path_buf[64];
+	char board_disp[BOARD_STR_LEN * 2];
 	char hand_str[8];
 	float probs[FLOP_MAX_ACTIONS];
 	uint64_t c1[MAX_COMBOS], c2[MAX_COMBOS];
 	GameState state;
-	DisplayPotState pot_state;
 	int n_actions = 6;
 	const char *const *labels;
 	int row = 0;
@@ -288,22 +229,22 @@ static void redraw_status(WINDOW *win) {
 	int is_suited = (g_cursor_row < g_cursor_col);
 
 	flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
-	compute_display_pot_state(g_current_history, g_current_num_actions, &pot_state);
 	format_path(path_buf, sizeof(path_buf));
-	snprintf(controls, sizeof(controls), " v view b back 0-5 act | wasd move | q quit ");
+	format_board_for_status(g_board_str, board_disp, sizeof(board_disp));
+	snprintf(controls, sizeof(controls), " v view   b back   0-5 act  |  wasd move  |  q quit ");
 	werase(win);
 
 	if (g_solving) {
-		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb OOP %.2fbb IP %.2fbb | Solving... %d iters ",
-			path_buf, g_board_str, hand_str, pot_state.pot, pot_state.oop_stack, pot_state.ip_stack, g_iterations);
+		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb | Solving... %d iters ",
+			path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack, g_iterations);
 		print_line_clipped(win, row++, line1);
 		print_line_clipped(win, row++, controls);
 	} else if (g_fs.solved) {
 		if (flop_solver_get_strategy_at_history(&g_fs, g_current_history, g_current_num_actions,
 			g_cursor_row, g_cursor_col, probs, &n_actions) == 0) {
 			labels = state.facing_bet ? IP_BET_ACTION_LABELS : OOP_ACTION_LABELS;
-			snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb OOP %.2fbb IP %.2fbb ",
-				path_buf, g_board_str, hand_str, pot_state.pot, pot_state.oop_stack, pot_state.ip_stack);
+			snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb ",
+				path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
 			print_line_clipped(win, row++, line1);
 			if (is_suited) {
 				int n = hand_string_to_combos(hand_str, g_fs.board, c1, c2, MAX_COMBOS);
@@ -312,7 +253,9 @@ static void redraw_status(WINDOW *win) {
 					float p[FLOP_MAX_ACTIONS];
 					char prefix[32];
 					hand_bitmask_to_string(c1[i], c2[i], combo_str, sizeof(combo_str));
-					if (flop_solver_get_hand_strategy(g_current_history, g_fs.board, c1[i] | c2[i], p) == 0) {
+					if (flop_solver_get_hand_strategy(
+						g_current_history, g_fs.board, g_current_num_actions, c1[i] | c2[i], p
+					) == 0) {
 						snprintf(prefix, sizeof(prefix), " %s ", combo_str);
 						draw_action_breakdown_line(win, row++, prefix, state.facing_bet, labels, p, n_actions);
 					} else {
@@ -324,14 +267,14 @@ static void redraw_status(WINDOW *win) {
 			}
 			print_line_clipped(win, row++, controls);
 		} else {
-			snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb OOP %.2fbb IP %.2fbb | (no data) ",
-				path_buf, g_board_str, hand_str, pot_state.pot, pot_state.oop_stack, pot_state.ip_stack);
+			snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb | (no data) ",
+				path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
 			print_line_clipped(win, row++, line1);
 			print_line_clipped(win, row++, controls);
 		}
 	} else {
-		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb OOP %.2fbb IP %.2fbb | Not solved (S to solve) ",
-			path_buf, g_board_str, hand_str, pot_state.pot, pot_state.oop_stack, pot_state.ip_stack);
+		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb | Not solved (S to solve) ",
+			path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
 		print_line_clipped(win, row++, line1);
 		print_line_clipped(win, row++, controls);
 	}

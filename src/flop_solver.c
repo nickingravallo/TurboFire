@@ -80,10 +80,33 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 	fs->iterations_done = n_iterations;
 }
 
-int flop_solver_get_hand_strategy(uint64_t history, uint64_t board, uint64_t hole_hand, float probs[FLOP_MAX_ACTIONS]) {
-	InfoSet *node = gto_get_node(make_info_set_key(history, board, hole_hand));
+int flop_solver_get_hand_strategy(
+	uint64_t history, uint64_t board, int num_actions, uint64_t hole_hand,
+	float probs[FLOP_MAX_ACTIONS]
+) {
+	GameState state;
+	uint8_t legal_actions;
+	float legal_sum = 0.0f;
+	int a;
+	gto_replay_flop_history(history, board, num_actions, &state);
+	InfoSet *node = gto_get_node(make_info_set_key(
+		history, board, hole_hand, state.pot, state.p1_stack, state.p2_stack
+	));
 	if (!node) return -1;
+	legal_actions = gto_get_legal_actions(&state);
 	gto_get_average_strategy(node, probs);
+	for (a = 0; a < FLOP_MAX_ACTIONS; a++) {
+		if (!(legal_actions & (1u << a)))
+			probs[a] = 0.0f;
+		legal_sum += probs[a];
+	}
+	if (legal_sum <= 0.0f) {
+		/* Sparse nodes can have zero average mass; fall back to current regret-matched strategy. */
+		gto_get_strategy(node->regret_sum, probs, legal_actions);
+	} else {
+		for (a = 0; a < FLOP_MAX_ACTIONS; a++)
+			probs[a] /= legal_sum;
+	}
 	return 0;
 }
 
@@ -122,7 +145,7 @@ int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, 
 	for (i = 0; i < n; i++) {
 		uint64_t hand = c1[i] | c2[i];
 		float p[FLOP_MAX_ACTIONS];
-		if (flop_solver_get_hand_strategy(history, fs->board, hand, p) == 0) {
+		if (flop_solver_get_hand_strategy(history, fs->board, num_actions, hand, p) == 0) {
 			for (a = 0; a < n_actions; a++) sum[a] += p[a];
 			n_seen++;
 		}
