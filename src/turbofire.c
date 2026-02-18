@@ -35,6 +35,15 @@ static char g_ip_name[64];
 static int g_solving;
 static int g_iterations = 50000;
 static int g_has_colors;
+static int g_solve_done_iters;
+static int g_solve_target_iters;
+static double g_solve_elapsed_sec;
+
+static double now_seconds(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
 
 /* Decode one card bitmask into rank (0-12) and suit (0-3). Return 0 if invalid. */
 static int card_to_rank_suit(uint64_t card, int *out_rank, int *out_suit) {
@@ -214,6 +223,7 @@ static void format_path(char *buf, size_t sz) {
 
 static void redraw_status(WINDOW *win) {
 	char line1[STATUS_LEN];
+	char line2[STATUS_LEN];
 	char controls[STATUS_LEN];
 	char path_buf[64];
 	char board_disp[BOARD_STR_LEN * 2];
@@ -235,9 +245,32 @@ static void redraw_status(WINDOW *win) {
 	werase(win);
 
 	if (g_solving) {
-		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb | Solving... %d iters ",
-			path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack, g_iterations);
+		double pct = (g_solve_target_iters > 0)
+			? (double)g_solve_done_iters / (double)g_solve_target_iters
+			: 0.0;
+		int bar_width = 24;
+		int filled = (int)(pct * bar_width + 0.5);
+		if (filled < 0) filled = 0;
+		if (filled > bar_width) filled = bar_width;
+		char bar[32];
+		for (int i = 0; i < bar_width; i++) bar[i] = (i < filled) ? '#' : '-';
+		bar[bar_width] = '\0';
+		double eta = (g_solve_done_iters > 0)
+			? (g_solve_elapsed_sec * (double)(g_solve_target_iters - g_solve_done_iters) / (double)g_solve_done_iters)
+			: -1.0;
+		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb ",
+			path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
+		if (eta >= 0.0) {
+			snprintf(line2, sizeof(line2),
+				" Solving [%s] %5.1f%%  (%d/%d)  elapsed %.1fs  ETA %.1fs ",
+				bar, pct * 100.0, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec, eta);
+		} else {
+			snprintf(line2, sizeof(line2),
+				" Solving [%s] %5.1f%%  (%d/%d)  elapsed %.1fs  ETA -- ",
+				bar, pct * 100.0, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec);
+		}
 		print_line_clipped(win, row++, line1);
+		print_line_clipped(win, row++, line2);
 		print_line_clipped(win, row++, controls);
 	} else if (g_fs.solved) {
 		if (flop_solver_get_strategy_at_history(&g_fs, g_current_history, g_current_num_actions,
@@ -356,10 +389,23 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 			g_cursor_row = (g_cursor_row < GRID_SIZE - 1) ? g_cursor_row + 1 : GRID_SIZE - 1;
 		} else if (ch == 'S') {
 			if (!g_solving && !g_fs.solved) {
+				const int chunk_iters = 2000;
+				double start_t = now_seconds();
 				g_solving = 1;
-				redraw_status(status_win);
-				flop_solver_solve(&g_fs, g_iterations);
+				g_solve_done_iters = 0;
+				g_solve_target_iters = g_iterations;
+				g_solve_elapsed_sec = 0.0;
+				while (g_solve_done_iters < g_solve_target_iters) {
+					int step = chunk_iters;
+					if (step > g_solve_target_iters - g_solve_done_iters)
+						step = g_solve_target_iters - g_solve_done_iters;
+					flop_solver_solve(&g_fs, step);
+					g_solve_done_iters += step;
+					g_solve_elapsed_sec = now_seconds() - start_t;
+					redraw_status(status_win);
+				}
 				g_solving = 0;
+				g_solve_elapsed_sec = now_seconds() - start_t;
 			}
 		}
 	}

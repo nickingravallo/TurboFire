@@ -48,6 +48,8 @@ typedef struct {
 	float to_call;              // Amount current player must call (0 if no bet)
 	float p1_stack;             // Remaining stack for OOP (P1)
 	float p2_stack;             // Remaining stack for IP (P2)
+	float p1_contribution;      // Total amount P1 has committed to the pot
+	float p2_contribution;      // Total amount P2 has committed to the pot
 	uint64_t p1_hand;           // Player 1 hole cards (bitmask)
 	uint64_t p2_hand;           // Player 2 hole cards (bitmask)
 	uint64_t board;             // Board cards (bitmask)

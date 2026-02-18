@@ -107,6 +107,8 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 	state->to_call = 0.0f;
 	state->p1_stack = STARTING_STACK_BB;
 	state->p2_stack = STARTING_STACK_BB;
+	state->p1_contribution = 0.5f;
+	state->p2_contribution = 1.0f;
 	state->street = STREET_PREFLOP;
 	state->active_player = P1;
 	state->num_actions_this_street = 0;
@@ -133,6 +135,8 @@ void gto_init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, u
 	state->to_call = 0.0f;
 	state->p1_stack = STARTING_STACK_BB;
 	state->p2_stack = STARTING_STACK_BB;
+	state->p1_contribution = STARTING_FLOP_POT_BB * 0.5f;
+	state->p2_contribution = STARTING_FLOP_POT_BB * 0.5f;
 	state->street = STREET_FLOP;
 	state->active_player = P1;
 	state->num_actions_this_street = 0;
@@ -152,12 +156,18 @@ bool is_terminal_state(GameState* state) {
 
 // Calculate terminal payouts using hand evaluation
 float gto_get_payout(GameState* state, int traverser) {
+	float traverser_contribution;
+	if (!state)
+		return 0.0f;
+	traverser_contribution = (traverser == P1) ? state->p1_contribution : state->p2_contribution;
 	// Fold case: last_action 0 when facing_bet meant Fold; folder is active_player (they just acted)
 	if (state->is_terminal && state->last_action == 0 && state->facing_bet) {
-		return (state->active_player == traverser) ? -(state->pot / 2.0f) : (state->pot / 2.0f);
+		if (state->active_player == traverser)
+			return -traverser_contribution;
+		return state->pot - traverser_contribution;
 	}
 
-	// Showdown: if turn/river are missing (flop-only tree), estimate utility by rollouts.
+	// Showdown: if turn/river are missing, evaluate exact expected utility over completions.
 	return estimate_showdown_utility(state, traverser);
 }
 
@@ -244,6 +254,7 @@ uint8_t gto_get_legal_actions(GameState* state) {
 GameState gto_apply_action(GameState state, int action_id) {
 	float desired_bet, desired_raise;
 	float *actor_stack;
+	float *actor_contribution;
 	float actor_commit;
 	float call_commit;
 	float previous_to_call;
@@ -258,6 +269,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 	state.num_actions_this_street++;
 	state.num_actions_total++;
 	actor_stack = (state.active_player == P1) ? &state.p1_stack : &state.p2_stack;
+	actor_contribution = (state.active_player == P1) ? &state.p1_contribution : &state.p2_contribution;
 
 	if (state.facing_bet) {
 		/* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise75, 4=Raise123 */
@@ -269,6 +281,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 			call_commit = (state.to_call < *actor_stack) ? state.to_call : *actor_stack;
 			*actor_stack -= call_commit;
 			if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+			*actor_contribution += call_commit;
 			state.pot += call_commit;
 			state.to_call = 0.0f;
 			/* Flop-only solver: treat call on flop as terminal (no turn/river). */
@@ -286,6 +299,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 				call_commit = (previous_to_call < *actor_stack) ? previous_to_call : *actor_stack;
 				*actor_stack -= call_commit;
 				if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+				*actor_contribution += call_commit;
 				state.pot += call_commit;
 				state.to_call = 0.0f;
 				state.is_terminal = true;
@@ -293,6 +307,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 			}
 			*actor_stack -= actor_commit;
 			if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+			*actor_contribution += actor_commit;
 			state.pot += actor_commit;
 			state.to_call = actor_commit - previous_to_call;
 			state.num_raises_this_street++;
@@ -332,6 +347,7 @@ GameState gto_apply_action(GameState state, int action_id) {
 			return state;
 		*actor_stack -= actor_commit;
 		if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+		*actor_contribution += actor_commit;
 		state.pot += actor_commit;
 		state.to_call = actor_commit;
 		state.num_raises_this_street++;
@@ -410,67 +426,92 @@ static uint64_t make_card(int rank, int suit) {
 	return 1ULL << (rank + suit * 16);
 }
 
-/* Pick one uniformly random unused card bitmask. Returns 0 on failure. */
-static uint64_t sample_unused_card(uint64_t used_cards) {
-	uint64_t candidates[52];
+static int build_remaining_cards(uint64_t used_cards, uint64_t out_cards[52]) {
 	int n = 0;
-	for (int rank = 0; rank < 13; rank++) {
-		for (int suit = 0; suit < 4; suit++) {
+	int rank, suit;
+	for (rank = 0; rank < 13; rank++) {
+		for (suit = 0; suit < 4; suit++) {
 			uint64_t card = make_card(rank, suit);
 			if ((used_cards & card) == 0)
-				candidates[n++] = card;
+				out_cards[n++] = card;
 		}
 	}
-	if (n <= 0)
-		return 0;
-	return candidates[rand() % n];
+	return n;
 }
 
-/*
- * Estimate showdown utility when the board has fewer than 5 cards by rolling
- * out random remaining public cards.
- */
+static float showdown_payoff_for_traverser(
+	int traverser_strength,
+	int opponent_strength,
+	float pot,
+	float traverser_contribution
+) {
+	if (traverser_strength > opponent_strength)
+		return pot - traverser_contribution;
+	if (traverser_strength < opponent_strength)
+		return -traverser_contribution;
+	return (pot * 0.5f) - traverser_contribution;
+}
+
+/* Exact showdown utility from current board to 5 board cards (no rollouts). */
 static float estimate_showdown_utility(const GameState *state, int traverser) {
 	const int n_board = __builtin_popcountll(state->board);
 	const int cards_needed = 5 - n_board;
-	const int rollout_samples = 64;
-	int wins = 0;
-	int losses = 0;
-	if (cards_needed <= 0) {
-		uint64_t traverser_hand = (traverser == P1) ? state->p1_hand : state->p2_hand;
-		uint64_t opponent_hand = (traverser == P1) ? state->p2_hand : state->p1_hand;
+	const uint64_t traverser_hand = (traverser == P1) ? state->p1_hand : state->p2_hand;
+	const uint64_t opponent_hand = (traverser == P1) ? state->p2_hand : state->p1_hand;
+	const float traverser_contribution = (traverser == P1) ? state->p1_contribution : state->p2_contribution;
+	uint64_t remaining_cards[52];
+	uint64_t used_cards;
+	float total_utility = 0.0f;
+	int remaining_count;
+	int outcomes = 0;
+	int i, j;
+
+	if (cards_needed < 0)
+		return 0.0f;
+
+	if (cards_needed == 0) {
 		int traverser_strength = evaluate(traverser_hand, state->board);
 		int opponent_strength = evaluate(opponent_hand, state->board);
-		if (traverser_strength > opponent_strength)
-			return state->pot / 2.0f;
-		if (traverser_strength < opponent_strength)
-			return -(state->pot / 2.0f);
+		return showdown_payoff_for_traverser(
+			traverser_strength, opponent_strength, state->pot, traverser_contribution
+		);
+	}
+
+	used_cards = state->board | state->p1_hand | state->p2_hand;
+	remaining_count = build_remaining_cards(used_cards, remaining_cards);
+	if (remaining_count <= 0)
+		return 0.0f;
+
+	if (cards_needed == 1) {
+		for (i = 0; i < remaining_count; i++) {
+			uint64_t board_full = state->board | remaining_cards[i];
+			int traverser_strength = evaluate(traverser_hand, board_full);
+			int opponent_strength = evaluate(opponent_hand, board_full);
+			total_utility += showdown_payoff_for_traverser(
+				traverser_strength, opponent_strength, state->pot, traverser_contribution
+			);
+			outcomes++;
+		}
+	} else if (cards_needed == 2) {
+		for (i = 0; i < remaining_count; i++) {
+			for (j = i + 1; j < remaining_count; j++) {
+				uint64_t board_full = state->board | remaining_cards[i] | remaining_cards[j];
+				int traverser_strength = evaluate(traverser_hand, board_full);
+				int opponent_strength = evaluate(opponent_hand, board_full);
+				total_utility += showdown_payoff_for_traverser(
+					traverser_strength, opponent_strength, state->pot, traverser_contribution
+				);
+				outcomes++;
+			}
+		}
+	} else {
+		/* The current solver only reaches terminal nodes from flop/turn/river states. */
 		return 0.0f;
 	}
 
-	for (int s = 0; s < rollout_samples; s++) {
-		uint64_t board_full = state->board;
-		uint64_t used = state->board | state->p1_hand | state->p2_hand;
-		for (int k = 0; k < cards_needed; k++) {
-			uint64_t card = sample_unused_card(used);
-			if (!card)
-				break; /* Invalid state; treat missing rollouts as chops. */
-			used |= card;
-			board_full |= card;
-		}
-		{
-			uint64_t traverser_hand = (traverser == P1) ? state->p1_hand : state->p2_hand;
-			uint64_t opponent_hand = (traverser == P1) ? state->p2_hand : state->p1_hand;
-			int traverser_strength = evaluate(traverser_hand, board_full);
-			int opponent_strength = evaluate(opponent_hand, board_full);
-			if (traverser_strength > opponent_strength)
-				wins++;
-			else if (traverser_strength < opponent_strength)
-				losses++;
-		}
-	}
-
-	return ((float)(wins - losses) / (float)rollout_samples) * (state->pot / 2.0f);
+	if (outcomes <= 0)
+		return 0.0f;
+	return total_utility / (float)outcomes;
 }
 
 // Deal a random board card that doesn't conflict with hole cards or existing board

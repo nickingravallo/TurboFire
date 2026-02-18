@@ -64,7 +64,9 @@ void flop_solver_set_ranges(FlopSolver *fs,
 void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 	if (!fs || n_iterations <= 0) return;
 	g_flop_board = fs->board;
-	init_gto_table();
+	/* Preserve table across chunked solve calls; reset only at start of a fresh solve. */
+	if (fs->iterations_done == 0)
+		init_gto_table();
 	for (int iter = 0; iter < n_iterations; iter++) {
 		uint64_t p1 = sample_hand_from_range(fs->oop_weights, fs->board);
 		uint64_t p2 = sample_hand_from_range(fs->ip_weights, fs->board);
@@ -77,7 +79,7 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 		gto_mccfr(state, P2);
 	}
 	fs->solved = 1;
-	fs->iterations_done = n_iterations;
+	fs->iterations_done += n_iterations;
 }
 
 int flop_solver_get_hand_strategy(
