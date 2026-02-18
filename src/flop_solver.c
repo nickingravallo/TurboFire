@@ -40,6 +40,21 @@ typedef struct {
 	HashTable *table;
 } worker_arg_t;
 
+/* Context for translating per-table progress into overall merge progress. */
+typedef struct {
+	FlopSolver *fs;
+	int step;      /* 0-based merge step (0 .. nthreads-1) */
+	int nthreads;
+} merge_progress_ctx_t;
+
+static void merge_progress_wrapper(void *user, int current, int total) {
+	merge_progress_ctx_t *ctx = (merge_progress_ctx_t *)user;
+	int overall_current = ctx->step * total + current;
+	int overall_total = ctx->nthreads * total;
+	if (ctx->fs->merge_progress_cb)
+		ctx->fs->merge_progress_cb(ctx->fs->merge_progress_user, overall_current, overall_total);
+}
+
 static void *solve_worker(void *arg) {
 	worker_arg_t *w = (worker_arg_t *)arg;
 	FlopSolver *fs = w->fs;
@@ -165,7 +180,8 @@ void flop_solver_set_ranges(FlopSolver *fs,
 }
 
 void flop_solver_begin_parallel_solve(FlopSolver *fs) {
-	int nthreads;
+	int nthreads, t;
+	HashTable **tables;
 	if (!fs) return;
 	nthreads = get_solver_thread_count();
 	fs->parallel_accumulate = 1;
@@ -177,29 +193,55 @@ void flop_solver_begin_parallel_solve(FlopSolver *fs) {
 		init_gto_table();
 		gto_rng_seed((unsigned)time(NULL));
 	}
-	fs->parallel_thread_tables = malloc((size_t)nthreads * TABLE_SIZE * sizeof(HashTable));
-	if (!fs->parallel_thread_tables) {
+	tables = (HashTable **)malloc((size_t)nthreads * sizeof(HashTable *));
+	if (!tables) {
 		fs->parallel_accumulate = 0;
 		fs->parallel_nthreads = 0;
 		return;
 	}
-	for (int t = 0; t < nthreads; t++)
-		gto_init_table((HashTable *)fs->parallel_thread_tables + (size_t)t * TABLE_SIZE);
+	for (t = 0; t < nthreads; t++) {
+		tables[t] = (HashTable *)malloc((size_t)TABLE_SIZE * sizeof(HashTable));
+		if (!tables[t]) {
+			while (t--) free(tables[t]);
+			free(tables);
+			fs->parallel_accumulate = 0;
+			fs->parallel_nthreads = 0;
+			return;
+		}
+		gto_init_table(tables[t]);
+	}
+	fs->parallel_thread_tables = tables;
 }
 
 void flop_solver_end_parallel_solve(FlopSolver *fs) {
-	HashTable *thread_tables;
-	int nthreads;
+	HashTable **thread_tables;
+	int nthreads, t;
 	if (!fs || !fs->parallel_accumulate) return;
 	nthreads = fs->parallel_nthreads;
-	thread_tables = (HashTable *)fs->parallel_thread_tables;
+	thread_tables = (HashTable **)fs->parallel_thread_tables;
 	if (thread_tables && nthreads > 1) {
-		int t;
+		merge_progress_ctx_t mctx;
+		mctx.fs = fs;
+		mctx.nthreads = nthreads;
 		if (fs->before_merge_cb)
 			fs->before_merge_cb(fs->before_merge_user);
-		for (t = 1; t < nthreads; t++)
-			gto_merge_table_into(thread_tables + 0 * TABLE_SIZE, thread_tables + (size_t)t * TABLE_SIZE);
-		gto_merge_table_into(gto_table, thread_tables + 0 * TABLE_SIZE);
+		if (fs->merge_progress_cb)
+			fs->merge_progress_cb(fs->merge_progress_user, 0, nthreads * TABLE_SIZE);
+		for (t = 1; t < nthreads; t++) {
+			mctx.step = t - 1;
+			gto_merge_table_into(thread_tables[0], thread_tables[t],
+				fs->merge_progress_cb ? merge_progress_wrapper : NULL,
+				fs->merge_progress_cb ? &mctx : NULL);
+			free(thread_tables[t]);
+			thread_tables[t] = NULL;
+		}
+		mctx.step = nthreads - 1;
+		gto_merge_table_into(gto_table, thread_tables[0],
+			fs->merge_progress_cb ? merge_progress_wrapper : NULL,
+			fs->merge_progress_cb ? &mctx : NULL);
+		if (fs->merge_progress_cb)
+			fs->merge_progress_cb(fs->merge_progress_user, nthreads * TABLE_SIZE, nthreads * TABLE_SIZE);
+		free(thread_tables[0]);
 		free(thread_tables);
 	}
 	fs->parallel_thread_tables = NULL;
@@ -235,7 +277,8 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 
 	{
 		int nthreads = fs->parallel_accumulate ? fs->parallel_nthreads : get_solver_thread_count();
-		HashTable *thread_tables = (HashTable *)fs->parallel_thread_tables;
+		HashTable **thread_table_ptrs = fs->parallel_accumulate ? (HashTable **)fs->parallel_thread_tables : NULL;
+		HashTable *thread_tables_block = NULL;  /* single block only when !parallel_accumulate */
 		int alloc_tables = 0;
 
 		if (nthreads <= 1) {
@@ -268,18 +311,18 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 			int remainder = n_iterations % nthreads;
 			int t;
 
-			if (!thread_tables) {
-				thread_tables = (HashTable *)malloc((size_t)nthreads * TABLE_SIZE * sizeof(HashTable));
+			if (!thread_table_ptrs) {
+				thread_tables_block = (HashTable *)malloc((size_t)nthreads * TABLE_SIZE * sizeof(HashTable));
 				alloc_tables = 1;
-				if (!thread_tables) return;
+				if (!thread_tables_block) return;
 				for (t = 0; t < nthreads; t++)
-					gto_init_table(thread_tables + (size_t)t * TABLE_SIZE);
+					gto_init_table(thread_tables_block + (size_t)t * TABLE_SIZE);
 			}
 
 			threads = (pthread_t *)malloc((size_t)nthreads * sizeof(pthread_t));
 			args = (worker_arg_t *)malloc((size_t)nthreads * sizeof(worker_arg_t));
 			if (!threads || !args) {
-				if (alloc_tables) free(thread_tables);
+				if (alloc_tables) free(thread_tables_block);
 				free(threads);
 				free(args);
 				return;
@@ -289,13 +332,13 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 				args[t].thread_id = t;
 				args[t].n_iters = iters_per_thread + (t < remainder ? 1 : 0);
 				args[t].base_seed = base_seed;
-				args[t].table = thread_tables + (size_t)t * TABLE_SIZE;
+				args[t].table = thread_table_ptrs ? thread_table_ptrs[t] : (thread_tables_block + (size_t)t * TABLE_SIZE);
 			}
 			for (t = 0; t < nthreads; t++) {
 				if (pthread_create(&threads[t], NULL, solve_worker, &args[t]) != 0) {
 					for (t--; t >= 0; t--)
 						pthread_join(threads[t], NULL);
-					if (alloc_tables) free(thread_tables);
+					if (alloc_tables) free(thread_tables_block);
 					free(threads);
 					free(args);
 					return;
@@ -307,13 +350,28 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 			free(args);
 
 			if (!fs->parallel_accumulate) {
+				HashTable *merge_src = thread_tables_block;
+				merge_progress_ctx_t mctx;
+				mctx.fs = fs;
+				mctx.nthreads = nthreads;
 				if (fs->before_merge_cb)
 					fs->before_merge_cb(fs->before_merge_user);
-				for (t = 1; t < nthreads; t++)
-					gto_merge_table_into(thread_tables + 0 * TABLE_SIZE, thread_tables + (size_t)t * TABLE_SIZE);
-				gto_merge_table_into(gto_table, thread_tables + 0 * TABLE_SIZE);
+				if (fs->merge_progress_cb)
+					fs->merge_progress_cb(fs->merge_progress_user, 0, nthreads * TABLE_SIZE);
+				for (t = 1; t < nthreads; t++) {
+					mctx.step = t - 1;
+					gto_merge_table_into(merge_src + 0 * TABLE_SIZE, merge_src + (size_t)t * TABLE_SIZE,
+						fs->merge_progress_cb ? merge_progress_wrapper : NULL,
+						fs->merge_progress_cb ? &mctx : NULL);
+				}
+				mctx.step = nthreads - 1;
+				gto_merge_table_into(gto_table, merge_src + 0 * TABLE_SIZE,
+					fs->merge_progress_cb ? merge_progress_wrapper : NULL,
+					fs->merge_progress_cb ? &mctx : NULL);
+				if (fs->merge_progress_cb)
+					fs->merge_progress_cb(fs->merge_progress_user, nthreads * TABLE_SIZE, nthreads * TABLE_SIZE);
 				if (alloc_tables)
-					free(thread_tables);
+					free(thread_tables_block);
 			}
 		}
 	}

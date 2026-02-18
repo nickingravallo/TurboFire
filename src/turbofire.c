@@ -34,7 +34,9 @@ static char g_oop_name[64];
 static char g_ip_name[64];
 static int g_solving;
 static int g_merging;  /* 1 = inside merge phase (workers done, merging into global table) */
-static int g_iterations = 5000;
+static int g_merge_current;  /* merge step (0..g_merge_total) */
+static int g_merge_total;    /* total merge steps (thread count) */
+static int g_iterations = 50000;
 static int g_has_colors;
 static int g_solve_done_iters;
 static int g_solve_target_iters;
@@ -125,14 +127,27 @@ static void format_board_for_status(uint64_t board_mask, char *board_out, size_t
 
 static int action_color_pair(int facing_bet, int action_idx) {
 	if (facing_bet) {
-		/* Fold red, call green, raises yellow. */
-		if (action_idx == 0) return 4;
+		/* Fold blue, call green, R33/R75/R123 light/medium/dark red. */
+		if (action_idx == 0) return 2;
 		if (action_idx == 1) return 3;
-		return 5;
+		if (action_idx == 2) return 4;
+		if (action_idx == 3) return 5;
+		return 6;
 	}
-	/* Check green, all bet sizes cyan. */
-	if (action_idx == 0) return 3;
-	return 6;
+	/* Check green, all bet sizes green. */
+	return 3;
+}
+
+/* Background pair (7-11) for cell segment by action. */
+static int action_idx_to_bg_pair(int facing_bet, int action_idx) {
+	if (facing_bet) {
+		if (action_idx == 0) return 7;
+		if (action_idx == 1) return 8;
+		if (action_idx == 2) return 9;
+		if (action_idx == 3) return 10;
+		return 11;
+	}
+	return 8; /* Check or bet -> green */
 }
 
 static void draw_action_breakdown_line(
@@ -174,7 +189,7 @@ static void redraw_grid(WINDOW *win) {
 	float probs[FLOP_MAX_ACTIONS];
 	GameState state;
 	const float (*weights)[GRID_SIZE];
-	int n_actions, best;
+	int n_actions;
 	flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
 	weights = g_view_oop ? g_fs.oop_weights : g_fs.ip_weights;
 	wclear(win);
@@ -200,19 +215,28 @@ static void redraw_grid(WINDOW *win) {
 				wattroff(win, A_REVERSE | A_BOLD);
 			} else if (in_range && g_fs.solved && viewing_acting &&
 				flop_solver_get_strategy_at_history(&g_fs, g_current_history, g_current_num_actions, r, c, probs, &n_actions) == 0) {
-				best = 0;
-				for (int a = 1; a < n_actions; a++)
-					if (probs[a] > probs[best]) best = a;
-				if (state.facing_bet) {
-					if (best == 0) wattron(win, COLOR_PAIR(2));
-					else if (best == 1) wattron(win, COLOR_PAIR(3));
-					else wattron(win, COLOR_PAIR(4));
+				if (g_has_colors && n_actions > 0) {
+					float cum[FLOP_MAX_ACTIONS + 1];
+					int seg_pair[4];
+					cum[0] = 0.0f;
+					for (int i = 0; i < n_actions; i++)
+						cum[i + 1] = cum[i] + probs[i];
+					for (int s = 0; s < 4; s++) {
+						float q = (s + 0.5f) / 4.0f;
+						int k = 0;
+						while (k < n_actions - 1 && q >= cum[k + 1])
+							k++;
+						seg_pair[s] = action_idx_to_bg_pair(state.facing_bet, k);
+					}
+					for (int s = 0; s < 4; s++) {
+						char ch = (s < 3 && hand_str[s] != '\0') ? hand_str[s] : ' ';
+						wattron(win, COLOR_PAIR(seg_pair[s]));
+						waddch(win, (chtype)(unsigned char)ch);
+						wattroff(win, COLOR_PAIR(seg_pair[s]));
+					}
 				} else {
-					/* Check should be green. */
-					if (best == 0) wattron(win, COLOR_PAIR(3));
-					else wattron(win, COLOR_PAIR(4));
+					wprintw(win, "%-3s ", hand_str);
 				}
-				wprintw(win, "%-3s ", hand_str);
 				wattrset(win, A_NORMAL);
 			} else if (in_range) {
 				wprintw(win, "%-3s ", hand_str);
@@ -270,28 +294,38 @@ static void redraw_status(WINDOW *win) {
 	werase(win);
 
 	if (g_solving) {
-		double pct = (g_solve_target_iters > 0)
-			? (double)g_solve_done_iters / (double)g_solve_target_iters
-			: 0.0;
-		int pct_int = (int)(pct * 100.0 + 0.5);
+		double pct;
+		int pct_int, bar_width = 50, filled;
+		char bar[64];
+		if (g_merging && g_merge_total > 0) {
+			pct = (double)g_merge_current / (double)g_merge_total;
+		} else {
+			pct = (g_solve_target_iters > 0)
+				? (double)g_solve_done_iters / (double)g_solve_target_iters
+				: 0.0;
+		}
+		pct_int = (int)(pct * 100.0 + 0.5);
 		if (pct_int < 0) pct_int = 0;
 		if (pct_int > 100) pct_int = 100;
-		int bar_width = 50;  /* one character per 2% for granular bar */
-		int filled = (int)(pct * bar_width + 0.5);
+		filled = (int)(pct * bar_width + 0.5);
 		if (filled < 0) filled = 0;
 		if (filled > bar_width) filled = bar_width;
-		char bar[64];
 		for (int i = 0; i < bar_width; i++) bar[i] = (i < filled) ? '#' : '-';
 		bar[bar_width] = '\0';
-		double eta = (g_solve_done_iters > 0)
+		double eta = (g_solve_done_iters > 0 && !g_merging)
 			? (g_solve_elapsed_sec * (double)(g_solve_target_iters - g_solve_done_iters) / (double)g_solve_done_iters)
 			: -1.0;
 		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb ",
 			path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
 		if (g_merging) {
-			snprintf(line2, sizeof(line2),
-				" Merging [%s] %3d%%  (%d/%d)  elapsed %.1fs  (merging results...) ",
-				bar, pct_int, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec);
+			if (g_merge_total > 0 && g_merge_total <= 128)
+				snprintf(line2, sizeof(line2),
+					" Merging [%s] %3d%%  (%d/%d threads)  elapsed %.1fs  (merging results...) ",
+					bar, pct_int, g_merge_current, g_merge_total, g_solve_elapsed_sec);
+			else
+				snprintf(line2, sizeof(line2),
+					" Merging [%s] %3d%%  elapsed %.1fs  (merging results...) ",
+					bar, pct_int, g_solve_elapsed_sec);
 		} else if (eta >= 0.0) {
 			snprintf(line2, sizeof(line2),
 				" Solving [%s] %3d%%  (%d/%d)  elapsed %.1fs  ETA %.1fs ",
@@ -369,6 +403,18 @@ static void redraw_status(WINDOW *win) {
 
 static void on_before_merge(void *user) {
 	g_merging = 1;
+	g_merge_current = 0;
+	g_merge_total = 0;
+	WINDOW *status_win = (WINDOW *)user;
+	if (status_win) {
+		redraw_status(status_win);
+		wrefresh(status_win);
+	}
+}
+
+static void on_merge_progress(void *user, int current, int total) {
+	g_merge_current = current;
+	g_merge_total = total;
 	WINDOW *status_win = (WINDOW *)user;
 	if (status_win) {
 		redraw_status(status_win);
@@ -388,12 +434,33 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 	g_has_colors = has_colors() ? 1 : 0;
 	if (g_has_colors) {
 		start_color();
+		/* Pairs 1-6: text (fg on black); 7-11: cell segment bg (white on color) */
 		init_pair(1, COLOR_WHITE, COLOR_BLACK);
 		init_pair(2, COLOR_BLUE, COLOR_BLACK);
 		init_pair(3, COLOR_GREEN, COLOR_BLACK);
-		init_pair(4, COLOR_RED, COLOR_BLACK);
-		init_pair(5, COLOR_YELLOW, COLOR_BLACK);
-		init_pair(6, COLOR_CYAN, COLOR_BLACK);
+		if (can_change_color()) {
+			/* Three red shades: light (R33), medium (R75), dark (R123). Reuse RED, YELLOW, MAGENTA. */
+			init_color(COLOR_RED, 627, 0, 0);       /* dark red */
+			init_color(COLOR_YELLOW, 863, 235, 235); /* medium red */
+			init_color(COLOR_MAGENTA, 1000, 471, 471); /* light red */
+			init_pair(4, COLOR_MAGENTA, COLOR_BLACK);  /* light red text */
+			init_pair(5, COLOR_YELLOW, COLOR_BLACK);   /* medium red text */
+			init_pair(6, COLOR_RED, COLOR_BLACK);      /* dark red text */
+			init_pair(7, COLOR_WHITE, COLOR_BLUE);
+			init_pair(8, COLOR_WHITE, COLOR_GREEN);
+			init_pair(9, COLOR_WHITE, COLOR_MAGENTA);
+			init_pair(10, COLOR_WHITE, COLOR_YELLOW);
+			init_pair(11, COLOR_WHITE, COLOR_RED);
+		} else {
+			init_pair(4, COLOR_RED, COLOR_BLACK);
+			init_pair(5, COLOR_RED, COLOR_BLACK);
+			init_pair(6, COLOR_RED, COLOR_BLACK);
+			init_pair(7, COLOR_WHITE, COLOR_BLUE);
+			init_pair(8, COLOR_WHITE, COLOR_GREEN);
+			init_pair(9, COLOR_WHITE, COLOR_RED);
+			init_pair(10, COLOR_WHITE, COLOR_RED);
+			init_pair(11, COLOR_WHITE, COLOR_RED);
+		}
 	}
 
 	g_cursor_row = 0;
@@ -473,6 +540,8 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 				g_merging = 0;
 				g_fs.before_merge_cb = on_before_merge;
 				g_fs.before_merge_user = status_win;
+				g_fs.merge_progress_cb = on_merge_progress;
+				g_fs.merge_progress_user = status_win;
 				g_solve_done_iters = 0;
 				g_solve_target_iters = g_iterations;
 				g_solve_elapsed_sec = 0.0;
@@ -496,8 +565,12 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 				flop_solver_end_parallel_solve(&g_fs);
 				g_solving = 0;
 				g_merging = 0;
+				g_merge_current = 0;
+				g_merge_total = 0;
 				g_fs.before_merge_cb = NULL;
 				g_fs.before_merge_user = NULL;
+				g_fs.merge_progress_cb = NULL;
+				g_fs.merge_progress_user = NULL;
 				g_solve_elapsed_sec = now_seconds() - start_t;
 			}
 		}

@@ -30,6 +30,9 @@ typedef struct {
 	/* Optional: called after workers join, before merging into global table (e.g. to show "Merging...") */
 	void (*before_merge_cb)(void *user);
 	void *before_merge_user;
+	/* Optional: called during merge with (current, total) steps so UI can show progress (0..total). */
+	void (*merge_progress_cb)(void *user, int current, int total);
+	void *merge_progress_user;
 	/* Merge-once-at-end: set by begin_parallel_solve, cleared by end_parallel_solve */
 	void *parallel_thread_tables;  /* HashTable * per thread, only when parallel_accumulate */
 	int parallel_nthreads;

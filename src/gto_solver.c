@@ -29,7 +29,7 @@ float gto_rng_uniform(void) {
 	return (float)(x >> 11) / (float)(UINT64_C(1) << 53);
 }
 
-HashTable gto_table[TABLE_SIZE];
+HashTable *gto_table = NULL;
 
 /* When set by a worker thread, node get/create use this; otherwise use gto_table. */
 static _Thread_local HashTable *gto_thread_table;
@@ -55,6 +55,11 @@ void gto_init_table(HashTable *table) {
 
 // Initialize hash table with empty magic numbers (global table only). Also seeds main-thread RNG for standalone use (e.g. tests).
 void init_gto_table(void) {
+	if (!gto_table) {
+		gto_table = (HashTable *)malloc((size_t)TABLE_SIZE * sizeof(HashTable));
+		if (!gto_table)
+			abort();
+	}
 	gto_init_table(gto_table);
 	gto_rng_seed(1);
 }
@@ -166,10 +171,16 @@ static InfoSet* get_or_create_in_table(HashTable *tbl, uint64_t key) {
 	return &tbl[hash_idx].infoSet;
 }
 
-void gto_merge_table_into(HashTable *dst, const HashTable *src) {
+#define MERGE_PROGRESS_INTERVAL 50000  /* report progress every this many entries */
+
+void gto_merge_table_into(HashTable *dst, const HashTable *src,
+	void (*progress)(void *user, int current, int total), void *progress_user)
+{
 	int i, a;
 	if (!dst || !src) return;
 	for (i = 0; i < TABLE_SIZE; i++) {
+		if (progress && i > 0 && (i % MERGE_PROGRESS_INTERVAL) == 0)
+			progress(progress_user, i, TABLE_SIZE);
 		if (src[i].key == EMPTY_MAGIC)
 			continue;
 		{
@@ -181,6 +192,8 @@ void gto_merge_table_into(HashTable *dst, const HashTable *src) {
 			}
 		}
 	}
+	if (progress)
+		progress(progress_user, TABLE_SIZE, TABLE_SIZE);
 }
 
 // Initialize game state

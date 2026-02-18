@@ -8,7 +8,7 @@
 #define MAX_ACTIONS    8   // OOP: Check + 5 bet sizes; IP facing bet: Fold, Call, 3 raise sizes
 #define BITS_PER_ACTION 3  // history stores action_id 0..7 per action
 #define MAX_HISTORY    100
-#define TABLE_SIZE     2000003  /* larger table = lower load factor, faster merge probing */
+#define TABLE_SIZE     8000003   /* ~700MB/table; reduce if OOM. Increase for faster merge (more RAM). */
 #define EMPTY_MAGIC    0xBEEFBEEF
 #define STARTING_FLOP_POT_BB 6.0f
 #define STARTING_STACK_BB 97.0f
@@ -76,8 +76,8 @@ typedef struct {
 	InfoSet infoSet;
 } HashTable;
 
-// Hash table for storing information sets
-extern HashTable gto_table[TABLE_SIZE];
+// Hash table for storing information sets (allocated in init_gto_table)
+extern HashTable *gto_table;
 
 // Hash table management
 void init_gto_table(void);
@@ -91,7 +91,9 @@ uint64_t make_info_set_key(
 );
 InfoSet* gto_get_or_create_node(uint64_t key);
 InfoSet* gto_get_node(uint64_t key);  /* lookup only; NULL if not found */
-void gto_merge_table_into(HashTable *dst, const HashTable *src);  /* add src entries into dst */
+/* Merge src into dst. If progress is non-NULL, call progress(user, current, total) periodically during the pass. */
+void gto_merge_table_into(HashTable *dst, const HashTable *src,
+	void (*progress)(void *user, int current, int total), void *progress_user);
 
 // Game state management
 void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand);
