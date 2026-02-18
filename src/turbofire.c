@@ -5,6 +5,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "flop_solver.h"
+#include "gto_solver.h"
 #include "range.h"
 #include "ranks.h"
 #include <stdio.h>
@@ -80,6 +81,16 @@ static void print_line_clipped(WINDOW *win, int row, const char *text) {
 	if (!text) return;
 	if (w <= 0) return;
 	waddnstr(win, text, w - 1);
+}
+
+/* Board to show for current street: flop + turn (if reached) + river (if reached). */
+static uint64_t display_board_for_street(const GameState *state) {
+	uint64_t b = g_fs.board;
+	if (state->street >= STREET_TURN && g_fs.preset_turn_card)
+		b |= g_fs.preset_turn_card;
+	if (state->street >= STREET_RIVER && g_fs.preset_river_card)
+		b |= g_fs.preset_river_card;
+	return b;
 }
 
 /* Render board bitmask as spaced cards (e.g. "Kd 7h 2s"). */
@@ -214,16 +225,25 @@ static void redraw_grid(WINDOW *win) {
 	wrefresh(win);
 }
 
+static const char *const STREET_NAMES[] = { "Preflop", "Flop", "Turn", "River" };
+
 static void format_path(char *buf, size_t sz) {
+	GameState s;
+	flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &s);
 	if (g_current_num_actions == 0) {
-		snprintf(buf, sz, "OOP to act");
+		snprintf(buf, sz, "%s: OOP to act", STREET_NAMES[s.street]);
 		return;
 	}
-	/* One OOP action: show "OOP Bet33 -> IP to act" */
-	int a = (int)(g_current_history & 7u);
-	if (a < 0) a = 0;
-	if (a > 5) a = 5;
-	snprintf(buf, sz, "OOP %s -> IP to act", OOP_ACTION_LABELS[a]);
+	if (g_current_num_actions == 1) {
+		int a = (int)(g_current_history & 7u);
+		if (a < 0) a = 0;
+		if (a > 5) a = 5;
+		snprintf(buf, sz, "OOP %s -> IP to act", OOP_ACTION_LABELS[a]);
+		return;
+	}
+	/* Two or more actions: show street and who acts */
+	snprintf(buf, sz, "%s: %s to act", STREET_NAMES[s.street],
+		s.active_player == P1 ? "OOP" : "IP");
 }
 
 static void redraw_status(WINDOW *win) {
@@ -245,7 +265,7 @@ static void redraw_status(WINDOW *win) {
 
 	flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
 	format_path(path_buf, sizeof(path_buf));
-	format_board_for_status(state.board, board_disp, sizeof(board_disp));
+	format_board_for_status(display_board_for_street(&state), board_disp, sizeof(board_disp));
 	snprintf(controls, sizeof(controls), " v view   b back   0-5 act  |  wasd move  |  q quit ");
 	werase(win);
 
@@ -283,6 +303,25 @@ static void redraw_status(WINDOW *win) {
 		}
 		print_line_clipped(win, row++, line1);
 		print_line_clipped(win, row++, line2);
+		print_line_clipped(win, row++, controls);
+	} else if (state.is_terminal) {
+		/* Showdown / hand over screen */
+		const char *result_msg;
+		if (state.last_action == 0 && state.facing_bet) {
+			/* Fold: active_player is the one who folded */
+			result_msg = (state.active_player == P1) ? "IP wins (OOP folded)" : "OOP wins (IP folded)";
+		} else {
+			result_msg = "Showdown";
+		}
+		snprintf(line1, sizeof(line1), "  Board: %s  |  Pot %.2f bb  ", board_disp, state.pot);
+		print_line_clipped(win, row++, line1);
+		if (g_has_colors) wattron(win, A_BOLD);
+		snprintf(line2, sizeof(line2), "  *** %s ***  ", result_msg);
+		print_line_clipped(win, row++, line2);
+		if (g_has_colors) wattroff(win, A_BOLD);
+		snprintf(line2, sizeof(line2), "  OOP %.2f bb  |  IP %.2f bb  ", state.p1_stack, state.p2_stack);
+		print_line_clipped(win, row++, line2);
+		snprintf(controls, sizeof(controls), " b back to previous action   q quit ");
 		print_line_clipped(win, row++, controls);
 	} else if (g_fs.solved) {
 		if (flop_solver_get_strategy_at_history(&g_fs, g_current_history, g_current_num_actions,
@@ -387,20 +426,37 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 		refresh();
 
 		int ch = getch();
+		GameState state;
 		if (ch == 'q' || ch == 'Q' || ch == 27) break;
 		if (ch == 'v' || ch == 'V' || ch == '\t') {
 			g_view_oop = 1 - g_view_oop;
 		} else if (ch == 'b' || ch == 'B' || ch == KEY_BACKSPACE) {
-			if (g_current_num_actions > 0) {
+			if (g_current_num_actions > 1) {
+				/* Pop last action */
+				g_current_history &= (1ULL << ((g_current_num_actions - 1) * BITS_PER_ACTION)) - 1;
+				g_current_num_actions--;
+				flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
+				g_view_oop = (state.active_player == P1) ? 1 : 0;
+			} else if (g_current_num_actions == 1) {
 				g_current_history = 0;
 				g_current_num_actions = 0;
+				g_view_oop = 1;
 			}
-		} else if (ch >= '0' && ch <= '5' && g_current_num_actions == 0) {
-			/* OOP to act: 0=Check, 1=Bet33, ..., 5=Bet123 -> go to IP */
-			int a = ch - '0';
-			g_current_history = (uint64_t)a;
-			g_current_num_actions = 1;
-			g_view_oop = 0;  /* auto-switch to IP view */
+		} else if (ch >= '0' && ch <= '5') {
+			/* Any non-terminal node: 0-5 when facing check, 0-4 when facing bet */
+			flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
+			if (state.is_terminal)
+				; /* ignore */
+			else {
+				int a = ch - '0';
+				int max_key = state.facing_bet ? 4 : 5;
+				if (a <= max_key) {
+					g_current_history |= ((uint64_t)(a & 7) << (g_current_num_actions * BITS_PER_ACTION));
+					g_current_num_actions++;
+					flop_solver_get_state_at_history(&g_fs, g_current_history, g_current_num_actions, &state);
+					g_view_oop = (state.active_player == P1) ? 1 : 0;
+				}
+			}
 		} else if (ch == KEY_LEFT || ch == 'a' || ch == 'A') {
 			g_cursor_col = (g_cursor_col > 0) ? g_cursor_col - 1 : 0;
 		} else if (ch == KEY_RIGHT || ch == 'd' || ch == 'D') {
