@@ -1,18 +1,62 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "gto_solver.h"
 #include "ranks.h"
 
+/* Thread-local RNG (xorshift64) for solver and sampling. */
+static _Thread_local uint64_t gto_rng_state;
+
+void gto_rng_seed(unsigned int seed) {
+	gto_rng_state = (uint64_t)seed;
+	if (gto_rng_state == 0)
+		gto_rng_state = 1;
+}
+
+float gto_rng_uniform(void) {
+	uint64_t x = gto_rng_state;
+	x ^= x << 13;
+	x ^= x >> 7;
+	x ^= x << 17;
+	gto_rng_state = x;
+	return (float)(x >> 11) / (float)(UINT64_C(1) << 53);
+}
+
 HashTable gto_table[TABLE_SIZE];
 
-// Initialize hash table with empty magic numbers
+/* When set by a worker thread, node get/create use this; otherwise use gto_table. */
+static _Thread_local HashTable *gto_thread_table;
+
+static HashTable *gto_current_table(void) {
+	return (gto_thread_table != NULL) ? gto_thread_table : gto_table;
+}
+
+void gto_set_thread_table(HashTable *table) {
+	gto_thread_table = table;
+}
+
+void gto_clear_thread_table(void) {
+	gto_thread_table = NULL;
+}
+
+void gto_init_table(HashTable *table) {
+	int i;
+	if (!table) return;
+	for (i = 0; i < TABLE_SIZE; i++)
+		table[i].key = EMPTY_MAGIC;
+}
+
+// Initialize hash table with empty magic numbers (global table only). Also seeds main-thread RNG for standalone use (e.g. tests).
 void init_gto_table(void) {
-	for (int i = 0; i < TABLE_SIZE; i++)
-		gto_table[i].key = EMPTY_MAGIC;
+	gto_init_table(gto_table);
+	gto_rng_seed(1);
 }
 
 // Hash function (from murmurhash)
@@ -59,42 +103,84 @@ uint64_t make_info_set_key(
 	return key;
 }
 
-// Get or create information set node
+// Get or create information set node (uses thread table if set, else global)
 InfoSet* gto_get_or_create_node(uint64_t key) {
+	HashTable *tbl = gto_current_table();
 	uint64_t hash_idx;
 	int i;
 	unsigned int probes = 0;
 	
 	hash_idx = hash_key(key) % TABLE_SIZE;
-	while (gto_table[hash_idx].key != EMPTY_MAGIC) {
-		if (gto_table[hash_idx].key == key)
-			return &gto_table[hash_idx].infoSet;
+	while (tbl[hash_idx].key != EMPTY_MAGIC) {
+		if (tbl[hash_idx].key == key)
+			return &tbl[hash_idx].infoSet;
 		hash_idx = (hash_idx + 1) % TABLE_SIZE;
 		if (++probes >= TABLE_SIZE)
 			return NULL;  /* table full; avoid infinite loop */
 	}
 	
 	/* Empty slot found */
-	gto_table[hash_idx].key = key;
+	tbl[hash_idx].key = key;
 	for (i = 0; i < MAX_ACTIONS; i++) {
-		gto_table[hash_idx].infoSet.regret_sum[i] = 0;
-		gto_table[hash_idx].infoSet.strategy_sum[i] = 0;
+		tbl[hash_idx].infoSet.regret_sum[i] = 0;
+		tbl[hash_idx].infoSet.strategy_sum[i] = 0;
 	}
-	gto_table[hash_idx].infoSet.key = key;
-	return &gto_table[hash_idx].infoSet;
+	tbl[hash_idx].infoSet.key = key;
+	return &tbl[hash_idx].infoSet;
 }
 
 InfoSet* gto_get_node(uint64_t key) {
+	HashTable *tbl = gto_current_table();
 	uint64_t hash_idx = hash_key(key) % TABLE_SIZE;
 	unsigned int probes = 0;
-	while (gto_table[hash_idx].key != EMPTY_MAGIC) {
-		if (gto_table[hash_idx].key == key)
-			return &gto_table[hash_idx].infoSet;
+	while (tbl[hash_idx].key != EMPTY_MAGIC) {
+		if (tbl[hash_idx].key == key)
+			return &tbl[hash_idx].infoSet;
 		hash_idx = (hash_idx + 1) % TABLE_SIZE;
 		if (++probes >= TABLE_SIZE)
 			return NULL;
 	}
 	return NULL;
+}
+
+/* Get or create node in a specific table (used during merge). */
+static InfoSet* get_or_create_in_table(HashTable *tbl, uint64_t key) {
+	uint64_t hash_idx;
+	int i;
+	unsigned int probes = 0;
+	if (!tbl) return NULL;
+	hash_idx = hash_key(key) % TABLE_SIZE;
+	while (tbl[hash_idx].key != EMPTY_MAGIC) {
+		if (tbl[hash_idx].key == key)
+			return &tbl[hash_idx].infoSet;
+		hash_idx = (hash_idx + 1) % TABLE_SIZE;
+		if (++probes >= TABLE_SIZE)
+			return NULL;
+	}
+	tbl[hash_idx].key = key;
+	for (i = 0; i < MAX_ACTIONS; i++) {
+		tbl[hash_idx].infoSet.regret_sum[i] = 0;
+		tbl[hash_idx].infoSet.strategy_sum[i] = 0;
+	}
+	tbl[hash_idx].infoSet.key = key;
+	return &tbl[hash_idx].infoSet;
+}
+
+void gto_merge_table_into(HashTable *dst, const HashTable *src) {
+	int i, a;
+	if (!dst || !src) return;
+	for (i = 0; i < TABLE_SIZE; i++) {
+		if (src[i].key == EMPTY_MAGIC)
+			continue;
+		{
+			InfoSet *node = get_or_create_in_table(dst, src[i].key);
+			if (!node) continue;
+			for (a = 0; a < MAX_ACTIONS; a++) {
+				node->regret_sum[a] += src[i].infoSet.regret_sum[a];
+				node->strategy_sum[a] += src[i].infoSet.strategy_sum[a];
+			}
+		}
+	}
 }
 
 // Initialize game state
@@ -418,7 +504,7 @@ int gto_get_action(float* strategy, uint8_t legal_actions) {
 	
 	last_legal_action = 0;
 	cumulative_strat = 0;
-	r = (float)rand() / (float)RAND_MAX;
+	r = gto_rng_uniform();
 	
 	for (a = 0; a < MAX_ACTIONS; a++) {
 		if (legal_actions & (1 << a)) {
@@ -501,6 +587,9 @@ static float estimate_showdown_utility(const GameState *state, int traverser) {
 		return 0.0f;
 
 	if (cards_needed == 1) {
+#ifdef _OPENMP
+		#pragma omp parallel for reduction(+:total_utility)
+#endif
 		for (i = 0; i < remaining_count; i++) {
 			uint64_t board_full = state->board | remaining_cards[i];
 			int traverser_strength = evaluate(traverser_hand, board_full);
@@ -508,9 +597,12 @@ static float estimate_showdown_utility(const GameState *state, int traverser) {
 			total_utility += showdown_payoff_for_traverser(
 				traverser_strength, opponent_strength, state->pot, traverser_contribution
 			);
-			outcomes++;
 		}
+		outcomes = remaining_count;
 	} else if (cards_needed == 2) {
+#ifdef _OPENMP
+		#pragma omp parallel for private(j) reduction(+:total_utility)
+#endif
 		for (i = 0; i < remaining_count; i++) {
 			for (j = i + 1; j < remaining_count; j++) {
 				uint64_t board_full = state->board | remaining_cards[i] | remaining_cards[j];
@@ -519,9 +611,9 @@ static float estimate_showdown_utility(const GameState *state, int traverser) {
 				total_utility += showdown_payoff_for_traverser(
 					traverser_strength, opponent_strength, state->pot, traverser_contribution
 				);
-				outcomes++;
 			}
 		}
+		outcomes = remaining_count * (remaining_count - 1) / 2;
 	} else {
 		/* The current solver only reaches terminal nodes from flop/turn/river states. */
 		return 0.0f;
@@ -555,9 +647,12 @@ uint64_t deal_board_card(GameState state) {
 	
 	if (num_available == 0)
 		return 0;  // No cards available (shouldn't happen)
-	
-	// Return random available card
-	return available_cards[rand() % num_available];
+	{
+		int idx = (int)(gto_rng_uniform() * (float)num_available);
+		if (idx >= num_available)
+			idx = num_available - 1;
+		return available_cards[idx];
+	}
 }
 
 // Main MCCFR traversal function

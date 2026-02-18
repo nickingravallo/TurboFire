@@ -32,7 +32,8 @@ static int g_view_oop;              /* 1 = viewing OOP range/strategy, 0 = viewi
 static char g_oop_name[64];
 static char g_ip_name[64];
 static int g_solving;
-static int g_iterations = 50000;
+static int g_merging;  /* 1 = inside merge phase (workers done, merging into global table) */
+static int g_iterations = 5000;
 static int g_has_colors;
 static int g_solve_done_iters;
 static int g_solve_target_iters;
@@ -252,11 +253,14 @@ static void redraw_status(WINDOW *win) {
 		double pct = (g_solve_target_iters > 0)
 			? (double)g_solve_done_iters / (double)g_solve_target_iters
 			: 0.0;
-		int bar_width = 24;
+		int pct_int = (int)(pct * 100.0 + 0.5);
+		if (pct_int < 0) pct_int = 0;
+		if (pct_int > 100) pct_int = 100;
+		int bar_width = 50;  /* one character per 2% for granular bar */
 		int filled = (int)(pct * bar_width + 0.5);
 		if (filled < 0) filled = 0;
 		if (filled > bar_width) filled = bar_width;
-		char bar[32];
+		char bar[64];
 		for (int i = 0; i < bar_width; i++) bar[i] = (i < filled) ? '#' : '-';
 		bar[bar_width] = '\0';
 		double eta = (g_solve_done_iters > 0)
@@ -264,14 +268,18 @@ static void redraw_status(WINDOW *win) {
 			: -1.0;
 		snprintf(line1, sizeof(line1), " %s | %s | %s | Pot %.2fbb  OOP %.2fbb  IP %.2fbb ",
 			path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
-		if (eta >= 0.0) {
+		if (g_merging) {
 			snprintf(line2, sizeof(line2),
-				" Solving [%s] %5.1f%%  (%d/%d)  elapsed %.1fs  ETA %.1fs ",
-				bar, pct * 100.0, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec, eta);
+				" Merging [%s] %3d%%  (%d/%d)  elapsed %.1fs  (merging results...) ",
+				bar, pct_int, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec);
+		} else if (eta >= 0.0) {
+			snprintf(line2, sizeof(line2),
+				" Solving [%s] %3d%%  (%d/%d)  elapsed %.1fs  ETA %.1fs ",
+				bar, pct_int, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec, eta);
 		} else {
 			snprintf(line2, sizeof(line2),
-				" Solving [%s] %5.1f%%  (%d/%d)  elapsed %.1fs  ETA -- ",
-				bar, pct * 100.0, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec);
+				" Solving [%s] %3d%%  (%d/%d)  elapsed %.1fs  ETA -- ",
+				bar, pct_int, g_solve_done_iters, g_solve_target_iters, g_solve_elapsed_sec);
 		}
 		print_line_clipped(win, row++, line1);
 		print_line_clipped(win, row++, line2);
@@ -317,6 +325,15 @@ static void redraw_status(WINDOW *win) {
 		print_line_clipped(win, row++, controls);
 	}
 	wrefresh(win);
+}
+
+static void on_before_merge(void *user) {
+	g_merging = 1;
+	WINDOW *status_win = (WINDOW *)user;
+	if (status_win) {
+		redraw_status(status_win);
+		wrefresh(status_win);
+	}
 }
 
 static int run_tui(const char *oop_path, const char *ip_path, const char *board_str, uint64_t board, int board_cards) {
@@ -394,22 +411,36 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 			g_cursor_row = (g_cursor_row < GRID_SIZE - 1) ? g_cursor_row + 1 : GRID_SIZE - 1;
 		} else if (ch == 'S') {
 			if (!g_solving && !g_fs.solved) {
-				const int chunk_iters = 2000;
 				double start_t = now_seconds();
 				g_solving = 1;
+				g_merging = 0;
+				g_fs.before_merge_cb = on_before_merge;
+				g_fs.before_merge_user = status_win;
 				g_solve_done_iters = 0;
 				g_solve_target_iters = g_iterations;
 				g_solve_elapsed_sec = 0.0;
+				flop_solver_begin_parallel_solve(&g_fs);
+				/* Chunk size = 1% of target (min 250) so progress updates every ~1% */
+				const int chunk_iters = (g_solve_target_iters >= 100)
+					? (g_solve_target_iters + 99) / 100
+					: g_solve_target_iters;
+				const int step = (chunk_iters >= 250) ? chunk_iters : 250;
 				while (g_solve_done_iters < g_solve_target_iters) {
-					int step = chunk_iters;
-					if (step > g_solve_target_iters - g_solve_done_iters)
-						step = g_solve_target_iters - g_solve_done_iters;
-					flop_solver_solve(&g_fs, step);
-					g_solve_done_iters += step;
+					g_merging = 0;
+					int n = step;
+					if (n > g_solve_target_iters - g_solve_done_iters)
+						n = g_solve_target_iters - g_solve_done_iters;
+					flop_solver_solve(&g_fs, n);
+					g_merging = 0;
+					g_solve_done_iters += n;
 					g_solve_elapsed_sec = now_seconds() - start_t;
 					redraw_status(status_win);
 				}
+				flop_solver_end_parallel_solve(&g_fs);
 				g_solving = 0;
+				g_merging = 0;
+				g_fs.before_merge_cb = NULL;
+				g_fs.before_merge_user = NULL;
 				g_solve_elapsed_sec = now_seconds() - start_t;
 			}
 		}

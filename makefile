@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -I src
+CFLAGS = -Wall -Wextra -O3 -march=native -I src -pthread -fopenmp
 SRC_DIR = src
 OBJ_DIR = obj
 OUT_DIR = output
@@ -40,9 +40,9 @@ all: dirs $(TARGET) tests mccfr
 dirs:
 	@mkdir -p $(OBJ_DIR) $(OUT_DIR) $(TEST_OUT_DIR) $(MCCFR_OUT_DIR)
 
-# Link the main executable (solver TUI, requires ncurses)
+# Link the main executable (solver TUI, requires ncurses, pthread, openmp)
 $(TARGET): $(TURBOFIRE_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ -lncurses
+	$(CC) $(CFLAGS) -o $@ $^ -lncurses -pthread -fopenmp
 
 # Compile source files to objects
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
@@ -53,7 +53,7 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 tests: $(TEST_BINS)
 
 $(TEST_OUT_DIR)/%: $(TEST_DIR)/%.c $(LIB_OBJS)
-	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@
+	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@ -pthread -fopenmp
 
 # --- MCCFR RULES ---
 
@@ -62,7 +62,7 @@ mccfr: dirs $(MCCFR_BINS)
 # Compile mccfr files
 # Links against LIB_OBJS so you can use your src/ functions (like card eval) inside mccfr/
 $(MCCFR_OUT_DIR)/%: $(MCCFR_DIR)/%.c $(LIB_OBJS)
-	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@
+	$(CC) $(CFLAGS) $< $(LIB_OBJS) -o $@ -pthread -fopenmp
 
 run: all
 	./$(TARGET)

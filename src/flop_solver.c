@@ -4,6 +4,71 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <errno.h>
+
+#define MAX_SOLVER_THREADS 8
+
+static uint64_t sample_hand_from_cache(const uint64_t *, const float *, int, float);
+
+static int get_solver_thread_count(void) {
+	const char *env = getenv("TURBOFIRE_NTHREADS");
+	if (env) {
+		long n = strtol(env, NULL, 10);
+		if (n > 0 && n <= MAX_SOLVER_THREADS)
+			return (int)n;
+		if (n > MAX_SOLVER_THREADS)
+			return MAX_SOLVER_THREADS;
+	}
+	{
+		long n = sysconf(_SC_NPROCESSORS_ONLN);
+		if (n > 0 && n <= MAX_SOLVER_THREADS)
+			return (int)n;
+		if (n > MAX_SOLVER_THREADS)
+			return MAX_SOLVER_THREADS;
+	}
+	return 1;
+}
+
+typedef struct {
+	FlopSolver *fs;
+	int thread_id;
+	int n_iters;
+	unsigned int base_seed;
+	HashTable *table;
+} worker_arg_t;
+
+static void *solve_worker(void *arg) {
+	worker_arg_t *w = (worker_arg_t *)arg;
+	FlopSolver *fs = w->fs;
+	int iter;
+	gto_set_thread_table(w->table);
+	gto_rng_seed(w->base_seed + (unsigned)w->thread_id);
+	for (iter = 0; iter < w->n_iters; iter++) {
+		uint64_t p1 = sample_hand_from_cache(
+			fs->oop_combo_hands, fs->oop_combo_cum_weights,
+			fs->oop_combo_count, fs->oop_combo_total_weight
+		);
+		uint64_t p2 = sample_hand_from_cache(
+			fs->ip_combo_hands, fs->ip_combo_cum_weights,
+			fs->ip_combo_count, fs->ip_combo_total_weight
+		);
+		if (!p1 || !p2 || (p1 & p2)) continue;
+		if ((p1 & fs->board) || (p2 & fs->board)) continue;
+		GameState state;
+		gto_init_postflop_state(
+			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
+		);
+		gto_mccfr(state, P1);
+		gto_init_postflop_state(
+			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
+		);
+		gto_mccfr(state, P2);
+	}
+	return NULL;
+}
 
 #define MAX_COMBOS 12
 #define MAX_RANGE_COMBOS 1326
@@ -48,8 +113,8 @@ static void build_weighted_combo_cache(
 }
 
 static uint64_t sample_hand_from_cache(
-	const uint64_t hands[MAX_RANGE_COMBOS],
-	const float cum_weights[MAX_RANGE_COMBOS],
+	const uint64_t *hands,
+	const float *cum_weights,
 	int n_hands,
 	float total_weight
 ) {
@@ -57,7 +122,7 @@ static uint64_t sample_hand_from_cache(
 	float u;
 	if (n_hands <= 0 || total_weight <= 0.0f)
 		return 0;
-	u = ((float)rand() / (float)RAND_MAX) * total_weight;
+	u = gto_rng_uniform() * total_weight;
 	if (u >= total_weight)
 		u = total_weight * 0.99999994f;
 	lo = 0;
@@ -99,6 +164,50 @@ void flop_solver_set_ranges(FlopSolver *fs,
 	fs->iterations_done = 0;
 }
 
+void flop_solver_begin_parallel_solve(FlopSolver *fs) {
+	int nthreads;
+	if (!fs) return;
+	nthreads = get_solver_thread_count();
+	fs->parallel_accumulate = 1;
+	fs->parallel_nthreads = nthreads;
+	fs->parallel_thread_tables = NULL;
+	if (nthreads <= 1)
+		return;
+	if (fs->iterations_done == 0) {
+		init_gto_table();
+		gto_rng_seed((unsigned)time(NULL));
+	}
+	fs->parallel_thread_tables = malloc((size_t)nthreads * TABLE_SIZE * sizeof(HashTable));
+	if (!fs->parallel_thread_tables) {
+		fs->parallel_accumulate = 0;
+		fs->parallel_nthreads = 0;
+		return;
+	}
+	for (int t = 0; t < nthreads; t++)
+		gto_init_table((HashTable *)fs->parallel_thread_tables + (size_t)t * TABLE_SIZE);
+}
+
+void flop_solver_end_parallel_solve(FlopSolver *fs) {
+	HashTable *thread_tables;
+	int nthreads;
+	if (!fs || !fs->parallel_accumulate) return;
+	nthreads = fs->parallel_nthreads;
+	thread_tables = (HashTable *)fs->parallel_thread_tables;
+	if (thread_tables && nthreads > 1) {
+		int t;
+		if (fs->before_merge_cb)
+			fs->before_merge_cb(fs->before_merge_user);
+		for (t = 1; t < nthreads; t++)
+			gto_merge_table_into(thread_tables + 0 * TABLE_SIZE, thread_tables + (size_t)t * TABLE_SIZE);
+		gto_merge_table_into(gto_table, thread_tables + 0 * TABLE_SIZE);
+		free(thread_tables);
+	}
+	fs->parallel_thread_tables = NULL;
+	fs->parallel_nthreads = 0;
+	fs->parallel_accumulate = 0;
+	fs->solved = 1;
+}
+
 void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 	if (!fs || n_iterations <= 0) return;
 	g_flop_board = fs->board;
@@ -119,28 +228,94 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 	if (fs->oop_combo_count <= 0 || fs->ip_combo_count <= 0)
 		return;
 	/* Preserve table across chunked solve calls; reset only at start of a fresh solve. */
-	if (fs->iterations_done == 0)
+	if (!fs->parallel_accumulate && fs->iterations_done == 0) {
 		init_gto_table();
-	for (int iter = 0; iter < n_iterations; iter++) {
-		uint64_t p1 = sample_hand_from_cache(
-			fs->oop_combo_hands, fs->oop_combo_cum_weights,
-			fs->oop_combo_count, fs->oop_combo_total_weight
-		);
-		uint64_t p2 = sample_hand_from_cache(
-			fs->ip_combo_hands, fs->ip_combo_cum_weights,
-			fs->ip_combo_count, fs->ip_combo_total_weight
-		);
-		if (!p1 || !p2 || (p1 & p2)) continue;
-		if ((p1 & fs->board) || (p2 & fs->board)) continue;
-		GameState state;
-		gto_init_postflop_state(
-			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
-		);
-		gto_mccfr(state, P1);
-		gto_init_postflop_state(
-			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
-		);
-		gto_mccfr(state, P2);
+		gto_rng_seed((unsigned)time(NULL));
+	}
+
+	{
+		int nthreads = fs->parallel_accumulate ? fs->parallel_nthreads : get_solver_thread_count();
+		HashTable *thread_tables = (HashTable *)fs->parallel_thread_tables;
+		int alloc_tables = 0;
+
+		if (nthreads <= 1) {
+			for (int iter = 0; iter < n_iterations; iter++) {
+				uint64_t p1 = sample_hand_from_cache(
+					fs->oop_combo_hands, fs->oop_combo_cum_weights,
+					fs->oop_combo_count, fs->oop_combo_total_weight
+				);
+				uint64_t p2 = sample_hand_from_cache(
+					fs->ip_combo_hands, fs->ip_combo_cum_weights,
+					fs->ip_combo_count, fs->ip_combo_total_weight
+				);
+				if (!p1 || !p2 || (p1 & p2)) continue;
+				if ((p1 & fs->board) || (p2 & fs->board)) continue;
+				GameState state;
+				gto_init_postflop_state(
+					&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
+				);
+				gto_mccfr(state, P1);
+				gto_init_postflop_state(
+					&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
+				);
+				gto_mccfr(state, P2);
+			}
+		} else {
+			pthread_t *threads;
+			worker_arg_t *args;
+			unsigned int base_seed = (unsigned)time(NULL);
+			int iters_per_thread = n_iterations / nthreads;
+			int remainder = n_iterations % nthreads;
+			int t;
+
+			if (!thread_tables) {
+				thread_tables = (HashTable *)malloc((size_t)nthreads * TABLE_SIZE * sizeof(HashTable));
+				alloc_tables = 1;
+				if (!thread_tables) return;
+				for (t = 0; t < nthreads; t++)
+					gto_init_table(thread_tables + (size_t)t * TABLE_SIZE);
+			}
+
+			threads = (pthread_t *)malloc((size_t)nthreads * sizeof(pthread_t));
+			args = (worker_arg_t *)malloc((size_t)nthreads * sizeof(worker_arg_t));
+			if (!threads || !args) {
+				if (alloc_tables) free(thread_tables);
+				free(threads);
+				free(args);
+				return;
+			}
+			for (t = 0; t < nthreads; t++) {
+				args[t].fs = fs;
+				args[t].thread_id = t;
+				args[t].n_iters = iters_per_thread + (t < remainder ? 1 : 0);
+				args[t].base_seed = base_seed;
+				args[t].table = thread_tables + (size_t)t * TABLE_SIZE;
+			}
+			for (t = 0; t < nthreads; t++) {
+				if (pthread_create(&threads[t], NULL, solve_worker, &args[t]) != 0) {
+					for (t--; t >= 0; t--)
+						pthread_join(threads[t], NULL);
+					if (alloc_tables) free(thread_tables);
+					free(threads);
+					free(args);
+					return;
+				}
+			}
+			for (t = 0; t < nthreads; t++)
+				pthread_join(threads[t], NULL);
+			free(threads);
+			free(args);
+
+			if (!fs->parallel_accumulate) {
+				if (fs->before_merge_cb)
+					fs->before_merge_cb(fs->before_merge_user);
+				for (t = 1; t < nthreads; t++)
+					gto_merge_table_into(thread_tables + 0 * TABLE_SIZE, thread_tables + (size_t)t * TABLE_SIZE);
+				gto_merge_table_into(gto_table, thread_tables + 0 * TABLE_SIZE);
+				if (alloc_tables)
+					free(thread_tables);
+			}
+		}
 	}
 	fs->solved = 1;
 	fs->iterations_done += n_iterations;

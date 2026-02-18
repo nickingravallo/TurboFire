@@ -27,6 +27,13 @@ typedef struct {
 	int combo_cache_valid;
 	int solved;               /* 1 after solve() */
 	int iterations_done;
+	/* Optional: called after workers join, before merging into global table (e.g. to show "Merging...") */
+	void (*before_merge_cb)(void *user);
+	void *before_merge_user;
+	/* Merge-once-at-end: set by begin_parallel_solve, cleared by end_parallel_solve */
+	void *parallel_thread_tables;  /* HashTable * per thread, only when parallel_accumulate */
+	int parallel_nthreads;
+	int parallel_accumulate;
 } FlopSolver;
 
 /* Set visible flop board and optional fixed turn/river cards. Clears solved state. */
@@ -44,6 +51,11 @@ void flop_solver_set_ranges(FlopSolver *fs,
 
 /* Run MCCFR for n_iterations. Samples hands from ranges (no board overlap). */
 void flop_solver_solve(FlopSolver *fs, int n_iterations);
+
+/* Chunked run with merge once at end: call begin, then solve(fs,n) in a loop, then end.
+ * Avoids repeated merge into the (full) global table; one merge at end is much faster. */
+void flop_solver_begin_parallel_solve(FlopSolver *fs);
+void flop_solver_end_parallel_solve(FlopSolver *fs);
 
 /* Get OOP strategy at start of flop (history=0) for hand (row,col). Fills probs[0..5] = Check, Bet33..Bet123. Return 0 if ok. */
 int flop_solver_get_oop_strategy(const FlopSolver *fs, int row, int col, float probs[FLOP_MAX_ACTIONS]);

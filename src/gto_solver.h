@@ -8,7 +8,7 @@
 #define MAX_ACTIONS    8   // OOP: Check + 5 bet sizes; IP facing bet: Fold, Call, 3 raise sizes
 #define BITS_PER_ACTION 3  // history stores action_id 0..7 per action
 #define MAX_HISTORY    100
-#define TABLE_SIZE     1000003
+#define TABLE_SIZE     2000003  /* larger table = lower load factor, faster merge probing */
 #define EMPTY_MAGIC    0xBEEFBEEF
 #define STARTING_FLOP_POT_BB 6.0f
 #define STARTING_STACK_BB 97.0f
@@ -81,6 +81,9 @@ extern HashTable gto_table[TABLE_SIZE];
 
 // Hash table management
 void init_gto_table(void);
+void gto_init_table(HashTable *table);  /* init a table (e.g. per-thread) */
+void gto_set_thread_table(HashTable *table);   /* use this table for get/create in this thread */
+void gto_clear_thread_table(void);             /* revert to global table */
 uint64_t hash_key(uint64_t key);
 uint64_t make_info_set_key(
 	uint64_t history, uint64_t board, uint64_t private_hand,
@@ -88,6 +91,7 @@ uint64_t make_info_set_key(
 );
 InfoSet* gto_get_or_create_node(uint64_t key);
 InfoSet* gto_get_node(uint64_t key);  /* lookup only; NULL if not found */
+void gto_merge_table_into(HashTable *dst, const HashTable *src);  /* add src entries into dst */
 
 // Game state management
 void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand);
@@ -116,5 +120,9 @@ void gto_get_average_strategy(const InfoSet* node, float* out_probs);
 // Utility functions
 uint64_t deal_board_card(GameState state);
 uint64_t combine_cards(uint64_t hand, uint64_t board);
+
+// Thread-local RNG (seed once per thread before solve work)
+void gto_rng_seed(unsigned int seed);
+float gto_rng_uniform(void);
 
 #endif // GTO_SOLVER_H
