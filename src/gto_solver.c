@@ -362,6 +362,16 @@ static void gto_advance_to_next_street(GameState *state) {
 		state->active_player = P1;
 		state->last_action = 0;
 		state->facing_bet = false;
+		/* Add preset turn/river card to board when advancing streets */
+		if (state->street == STREET_TURN && state->preset_turn_card &&
+			__builtin_popcountll(state->board) == 3 &&
+			((state->board | state->p1_hand | state->p2_hand) & state->preset_turn_card) == 0) {
+			state->board |= state->preset_turn_card;
+		} else if (state->street == STREET_RIVER && state->preset_river_card &&
+			__builtin_popcountll(state->board) == 4 &&
+			((state->board | state->p1_hand | state->p2_hand) & state->preset_river_card) == 0) {
+			state->board |= state->preset_river_card;
+		}
 	} else {
 		state->is_terminal = true;
 	}

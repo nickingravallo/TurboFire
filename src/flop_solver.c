@@ -392,7 +392,7 @@ int flop_solver_get_strategy_at_history(const FlopSolver *fs, uint64_t history, 
 	if (num_actions_out) *num_actions_out = n_actions;
 
 	hand_at(row, col, hand_str, sizeof(hand_str));
-	n = hand_string_to_combos(hand_str, fs->board, c1, c2, MAX_COMBOS);
+	n = hand_string_to_combos(hand_str, state.board, c1, c2, MAX_COMBOS);
 	if (n <= 0) return -1;
 	for (a = 0; a < FLOP_MAX_ACTIONS; a++) sum[a] = 0.0f;
 	n_seen = 0;

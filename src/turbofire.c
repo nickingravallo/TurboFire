@@ -331,7 +331,8 @@ static void redraw_status(WINDOW *win) {
 				path_buf, board_disp, hand_str, state.pot, state.p1_stack, state.p2_stack);
 			print_line_clipped(win, row++, line1);
 			if (is_suited) {
-				int n = hand_string_to_combos(hand_str, g_fs.board, c1, c2, MAX_COMBOS);
+				uint64_t current_board = display_board_for_street(&state);
+				int n = hand_string_to_combos(hand_str, current_board, c1, c2, MAX_COMBOS);
 				for (int i = 0; i < n && row < STATUS_ROWS - 1; i++) {
 					char combo_str[8];
 					float p[FLOP_MAX_ACTIONS];
