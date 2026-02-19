@@ -1,0 +1,16 @@
+- Attempted TurboFire back in January of 2025
+ - Realized we needed hand solver and ev finder
+ - Way too slow, did not realized how it fit into end goal
+- Used AI to attempt to extrapolate into a MC sim, could solve 10k hands in .1 seconds (slow)
+- Came across the CactusKev solver and OMPEval (Nov 2025)
+- Attempted to implement OMPEval by hand, AI assisted (Dec 2025 Jan 2026)
+- Tried to implement Solvers using only AI agents, failed (Jan / Feb 2026)
+- Learned the basics of MCCFR using rock paper scissors and leduc holdem
+- Once i was able to code my own Leduc example, with gemini helping, agents built upon it for TurboFire
+- Most of the issues I had previous ran into were based on UI issues
+- Providing framework for OMPEval and Leduc solver prevented the TUI issues, alongside providing tests
+- Having a background in how the solver worked allowed me to diagnose issues as they appeared (20/20/20/20/20 split action)
+- Learned more about optimization in the meantime
+- Code, as of now, is 100% AI written past the OMPEval and tests
+- Using new agents to solve problems in parallel
+
