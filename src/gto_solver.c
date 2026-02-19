@@ -34,6 +34,18 @@ HashTable *gto_table = NULL;
 /* When set by a worker thread, node get/create use this; otherwise use gto_table. */
 static _Thread_local HashTable *gto_thread_table;
 
+/* Counts insertion failures due to MAX_PROBE_LEN cap (per-thread). */
+static _Thread_local int gto_insert_fail_count = 0;
+#define TABLE_SATURATED_THRESHOLD 100
+
+void gto_reset_table_saturation(void) {
+	gto_insert_fail_count = 0;
+}
+
+int gto_is_table_saturated(void) {
+	return gto_insert_fail_count >= TABLE_SATURATED_THRESHOLD;
+}
+
 static HashTable *gto_current_table(void) {
 	return (gto_thread_table != NULL) ? gto_thread_table : gto_table;
 }
@@ -120,8 +132,10 @@ InfoSet* gto_get_or_create_node(uint64_t key) {
 		if (tbl[hash_idx].key == key)
 			return &tbl[hash_idx].infoSet;
 		hash_idx = (hash_idx + 1) % TABLE_SIZE;
-		if (++probes >= TABLE_SIZE)
-			return NULL;  /* table full; avoid infinite loop */
+		if (++probes >= MAX_PROBE_LEN) {
+			gto_insert_fail_count++;
+			return NULL;
+		}
 	}
 	
 	/* Empty slot found */
@@ -159,7 +173,7 @@ static InfoSet* get_or_create_in_table(HashTable *tbl, uint64_t key) {
 		if (tbl[hash_idx].key == key)
 			return &tbl[hash_idx].infoSet;
 		hash_idx = (hash_idx + 1) % TABLE_SIZE;
-		if (++probes >= TABLE_SIZE)
+		if (++probes >= MAX_PROBE_LEN)
 			return NULL;
 	}
 	tbl[hash_idx].key = key;
@@ -172,12 +186,14 @@ static InfoSet* get_or_create_in_table(HashTable *tbl, uint64_t key) {
 }
 
 #define MERGE_PROGRESS_INTERVAL 50000  /* report progress every this many entries */
+#define MERGE_FAIL_LIMIT 1000  /* stop merge pass when destination is saturated */
 
-void gto_merge_table_into(HashTable *dst, const HashTable *src,
+int gto_merge_table_into(HashTable *dst, const HashTable *src,
 	void (*progress)(void *user, int current, int total), void *progress_user)
 {
 	int i, a;
-	if (!dst || !src) return;
+	int fail_count = 0;
+	if (!dst || !src) return 0;
 	for (i = 0; i < TABLE_SIZE; i++) {
 		if (progress && i > 0 && (i % MERGE_PROGRESS_INTERVAL) == 0)
 			progress(progress_user, i, TABLE_SIZE);
@@ -185,7 +201,11 @@ void gto_merge_table_into(HashTable *dst, const HashTable *src,
 			continue;
 		{
 			InfoSet *node = get_or_create_in_table(dst, src[i].key);
-			if (!node) continue;
+			if (!node) {
+				if (++fail_count >= MERGE_FAIL_LIMIT)
+					break;
+				continue;
+			}
 			for (a = 0; a < MAX_ACTIONS; a++) {
 				node->regret_sum[a] += src[i].infoSet.regret_sum[a];
 				node->strategy_sum[a] += src[i].infoSet.strategy_sum[a];
@@ -194,6 +214,7 @@ void gto_merge_table_into(HashTable *dst, const HashTable *src,
 	}
 	if (progress)
 		progress(progress_user, TABLE_SIZE, TABLE_SIZE);
+	return (fail_count >= MERGE_FAIL_LIMIT) ? 1 : 0;
 }
 
 // Initialize game state

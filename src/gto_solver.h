@@ -10,6 +10,7 @@
 #define MAX_HISTORY    100
 #define TABLE_SIZE     8000003   /* ~700MB/table; reduce if OOM. Increase for faster merge (more RAM). */
 #define EMPTY_MAGIC    0xBEEFBEEF
+#define MAX_PROBE_LEN  256   /* cap linear probing; prevents O(n) degenerate performance at high load */
 #define STARTING_FLOP_POT_BB 6.0f
 #define STARTING_STACK_BB 97.0f
 
@@ -89,8 +90,9 @@ uint64_t make_info_set_key(
 );
 InfoSet* gto_get_or_create_node(uint64_t key);
 InfoSet* gto_get_node(uint64_t key);  /* lookup only; NULL if not found */
-/* Merge src into dst. If progress is non-NULL, call progress(user, current, total) periodically during the pass. */
-void gto_merge_table_into(HashTable *dst, const HashTable *src,
+/* Merge src into dst. If progress is non-NULL, call progress(user, current, total) periodically during the pass.
+ * Returns 1 if merge stopped early (destination saturated), 0 if completed normally. */
+int gto_merge_table_into(HashTable *dst, const HashTable *src,
 	void (*progress)(void *user, int current, int total), void *progress_user);
 
 // Game state management
@@ -124,5 +126,9 @@ uint64_t combine_cards(uint64_t hand, uint64_t board);
 // Thread-local RNG (seed once per thread before solve work)
 void gto_rng_seed(unsigned int seed);
 float gto_rng_uniform(void);
+
+// Table saturation tracking (per-thread; reset before each worker run)
+void gto_reset_table_saturation(void);
+int gto_is_table_saturated(void);
 
 #endif // GTO_SOLVER_H

@@ -1,6 +1,6 @@
 /*
  * TurboFire solver TUI: 13x13 grid, highlight hand for action breakdown, traverse streets.
- * Usage: turbofire <oop_range.json> <ip_range.json> <board>  e.g. turbofire oop.json ip.json AhKhQd3c4d
+ * Usage: turbofire [-i iters] <oop_range.json> <ip_range.json> <board>
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <ncurses.h>
 #include <time.h>
 
@@ -569,10 +570,14 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 					int n = step;
 					if (n > g_solve_target_iters - g_solve_done_iters)
 						n = g_solve_target_iters - g_solve_done_iters;
+					int prev_done = g_fs.iterations_done;
 					flop_solver_solve(&g_fs, n);
 					g_merging = 0;
-					g_solve_done_iters += n;
+					int chunk_actual = g_fs.iterations_done - prev_done;
+					g_solve_done_iters = g_fs.iterations_done;
 					g_solve_elapsed_sec = now_seconds() - start_t;
+					if (chunk_actual < n)
+						g_solve_target_iters = g_solve_done_iters;
 					redraw_status(status_win);
 				}
 				flop_solver_end_parallel_solve(&g_fs);
@@ -599,14 +604,34 @@ int main(int argc, char **argv) {
 	const char *oop_path = NULL;
 	const char *ip_path = NULL;
 	const char *board_str = NULL;
+	int user_iters = 0;
+	int opt;
 
-	if (argc >= 4) {
-		oop_path = argv[1];
-		ip_path = argv[2];
-		board_str = argv[3];
-	} else if (argc >= 1) {
-		fprintf(stderr, "Usage: %s <oop_range.json> <ip_range.json> <board>\n", argv[0]);
-		fprintf(stderr, "  e.g. %s data/ranges/oop.json data/ranges/ip.json AhKhQd3c4d\n", argv[0]);
+	while ((opt = getopt(argc, argv, "i:")) != -1) {
+		switch (opt) {
+		case 'i': {
+			char *end;
+			long val = strtol(optarg, &end, 10);
+			if (*end != '\0' || val <= 0) {
+				fprintf(stderr, "Error: -i requires a positive integer\n");
+				return 1;
+			}
+			user_iters = (int)val;
+			break;
+		}
+		default:
+			fprintf(stderr, "Usage: %s [-i iterations] <oop_range.json> <ip_range.json> <board>\n", argv[0]);
+			return 1;
+		}
+	}
+
+	if (argc - optind >= 3) {
+		oop_path = argv[optind];
+		ip_path = argv[optind + 1];
+		board_str = argv[optind + 2];
+	} else {
+		fprintf(stderr, "Usage: %s [-i iterations] <oop_range.json> <ip_range.json> <board>\n", argv[0]);
+		fprintf(stderr, "  e.g. %s -i 5000000 data/ranges/oop.json data/ranges/ip.json AhKhQd3c4d\n", argv[0]);
 		return 1;
 	}
 
@@ -650,6 +675,9 @@ int main(int argc, char **argv) {
 
 	flop_solver_set_board_runout(&g_fs, board, preset_turn_card, preset_river_card);
 	flop_solver_set_ranges(&g_fs, oop_grid, ip_grid);
+
+	if (user_iters > 0)
+		g_iterations = user_iters;
 
 	init_rank_map();
 	init_flush_map();

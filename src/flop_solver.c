@@ -57,6 +57,7 @@ typedef struct {
 	int n_iters;
 	unsigned int base_seed;
 	HashTable *table;
+	int actual_iters;
 } worker_arg_t;
 
 /* Context for translating per-table progress into overall merge progress. */
@@ -80,6 +81,7 @@ static void *solve_worker(void *arg) {
 	int iter;
 	gto_set_thread_table(w->table);
 	gto_rng_seed(w->base_seed + (unsigned)w->thread_id);
+	gto_reset_table_saturation();
 	for (iter = 0; iter < w->n_iters; iter++) {
 		uint64_t p1 = sample_hand_from_cache(
 			fs->oop_combo_hands, fs->oop_combo_cum_weights,
@@ -100,7 +102,10 @@ static void *solve_worker(void *arg) {
 			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
 		);
 		gto_mccfr(state, P2);
+		if ((iter & 0xFF) == 0 && iter > 0 && gto_is_table_saturated())
+			break;
 	}
+	w->actual_iters = iter;
 	return NULL;
 }
 
@@ -246,21 +251,23 @@ void flop_solver_end_parallel_solve(FlopSolver *fs) {
 			fs->before_merge_cb(fs->before_merge_user);
 		if (fs->merge_progress_cb)
 			fs->merge_progress_cb(fs->merge_progress_user, 0, nthreads * TABLE_SIZE);
-		for (t = 1; t < nthreads; t++) {
-			mctx.step = t - 1;
-			gto_merge_table_into(thread_tables[0], thread_tables[t],
+		for (t = 0; t < nthreads; t++) {
+			mctx.step = t;
+			int saturated = gto_merge_table_into(gto_table, thread_tables[t],
 				fs->merge_progress_cb ? merge_progress_wrapper : NULL,
 				fs->merge_progress_cb ? &mctx : NULL);
 			free(thread_tables[t]);
 			thread_tables[t] = NULL;
+			if (saturated) {
+				for (t++; t < nthreads; t++) {
+					free(thread_tables[t]);
+					thread_tables[t] = NULL;
+				}
+				break;
+			}
 		}
-		mctx.step = nthreads - 1;
-		gto_merge_table_into(gto_table, thread_tables[0],
-			fs->merge_progress_cb ? merge_progress_wrapper : NULL,
-			fs->merge_progress_cb ? &mctx : NULL);
 		if (fs->merge_progress_cb)
 			fs->merge_progress_cb(fs->merge_progress_user, nthreads * TABLE_SIZE, nthreads * TABLE_SIZE);
-		free(thread_tables[0]);
 		free(thread_tables);
 	}
 	fs->parallel_thread_tables = NULL;
@@ -299,8 +306,10 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 		HashTable **thread_table_ptrs = fs->parallel_accumulate ? (HashTable **)fs->parallel_thread_tables : NULL;
 		HashTable *thread_tables_block = NULL;  /* single block only when !parallel_accumulate */
 		int alloc_tables = 0;
+		int actual_total = n_iterations;
 
 		if (nthreads <= 1) {
+			gto_reset_table_saturation();
 			for (int iter = 0; iter < n_iterations; iter++) {
 				uint64_t p1 = sample_hand_from_cache(
 					fs->oop_combo_hands, fs->oop_combo_cum_weights,
@@ -321,6 +330,10 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 					&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
 				);
 				gto_mccfr(state, P2);
+				if ((iter & 0xFF) == 0 && iter > 0 && gto_is_table_saturated()) {
+					actual_total = iter;
+					break;
+				}
 			}
 		} else {
 			pthread_t *threads;
@@ -365,6 +378,9 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 			}
 			for (t = 0; t < nthreads; t++)
 				pthread_join(threads[t], NULL);
+			actual_total = 0;
+			for (t = 0; t < nthreads; t++)
+				actual_total += args[t].actual_iters;
 			free(threads);
 			free(args);
 
@@ -377,25 +393,22 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 					fs->before_merge_cb(fs->before_merge_user);
 				if (fs->merge_progress_cb)
 					fs->merge_progress_cb(fs->merge_progress_user, 0, nthreads * TABLE_SIZE);
-				for (t = 1; t < nthreads; t++) {
-					mctx.step = t - 1;
-					gto_merge_table_into(merge_src + 0 * TABLE_SIZE, merge_src + (size_t)t * TABLE_SIZE,
+				for (t = 0; t < nthreads; t++) {
+					mctx.step = t;
+					if (gto_merge_table_into(gto_table, merge_src + (size_t)t * TABLE_SIZE,
 						fs->merge_progress_cb ? merge_progress_wrapper : NULL,
-						fs->merge_progress_cb ? &mctx : NULL);
+						fs->merge_progress_cb ? &mctx : NULL) != 0)
+						break;
 				}
-				mctx.step = nthreads - 1;
-				gto_merge_table_into(gto_table, merge_src + 0 * TABLE_SIZE,
-					fs->merge_progress_cb ? merge_progress_wrapper : NULL,
-					fs->merge_progress_cb ? &mctx : NULL);
 				if (fs->merge_progress_cb)
 					fs->merge_progress_cb(fs->merge_progress_user, nthreads * TABLE_SIZE, nthreads * TABLE_SIZE);
 				if (alloc_tables)
 					free(thread_tables_block);
 			}
 		}
+		fs->solved = 1;
+		fs->iterations_done += actual_total;
 	}
-	fs->solved = 1;
-	fs->iterations_done += n_iterations;
 }
 
 int flop_solver_get_hand_strategy_with_runout(
