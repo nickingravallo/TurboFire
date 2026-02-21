@@ -56,32 +56,14 @@ typedef struct {
 	int thread_id;
 	int n_iters;
 	unsigned int base_seed;
-	HashTable *table;
 	int actual_iters;
 } worker_arg_t;
-
-/* Context for translating per-table progress into overall merge progress. */
-typedef struct {
-	FlopSolver *fs;
-	int step;      /* 0-based merge step (0 .. nthreads-1) */
-	int nthreads;
-} merge_progress_ctx_t;
-
-static void merge_progress_wrapper(void *user, int current, int total) {
-	merge_progress_ctx_t *ctx = (merge_progress_ctx_t *)user;
-	int overall_current = ctx->step * total + current;
-	int overall_total = ctx->nthreads * total;
-	if (ctx->fs->merge_progress_cb)
-		ctx->fs->merge_progress_cb(ctx->fs->merge_progress_user, overall_current, overall_total);
-}
 
 static void *solve_worker(void *arg) {
 	worker_arg_t *w = (worker_arg_t *)arg;
 	FlopSolver *fs = w->fs;
 	int iter;
-	gto_set_thread_table(w->table);
 	gto_rng_seed(w->base_seed + (unsigned)w->thread_id);
-	gto_reset_table_saturation();
 	for (iter = 0; iter < w->n_iters; iter++) {
 		uint64_t p1 = sample_hand_from_cache(
 			fs->oop_combo_hands, fs->oop_combo_cum_weights,
@@ -102,8 +84,6 @@ static void *solve_worker(void *arg) {
 			&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
 		);
 		gto_mccfr(state, P2);
-		if ((iter & 0xFF) == 0 && iter > 0 && gto_is_table_saturated())
-			break;
 	}
 	w->actual_iters = iter;
 	return NULL;
@@ -111,6 +91,106 @@ static void *solve_worker(void *arg) {
 
 #define MAX_COMBOS 12
 #define MAX_RANGE_COMBOS 1326
+#define MAX_TURN_HISTORIES 256
+
+/* (history, num_actions) for a flop line that reaches the turn */
+typedef struct {
+	uint64_t history;
+	int num_actions;
+} turn_history_t;
+
+static turn_history_t g_turn_histories[MAX_TURN_HISTORIES];
+static int g_turn_history_count;
+
+/* Recursively enumerate all (history, num_actions) that reach the turn. Uses preset_turn so advance adds turn card. */
+static void enumerate_turn_histories_rec(
+	uint64_t history, int num_actions,
+	uint64_t flop_board, uint64_t preset_turn_card,
+	int *out_count
+) {
+	GameState state;
+	uint8_t legal;
+	int a;
+	if (*out_count >= MAX_TURN_HISTORIES)
+		return;
+	gto_replay_postflop_history(history, flop_board, preset_turn_card, 0, num_actions, &state);
+	if (state.is_terminal)
+		return;
+	if (state.street == STREET_TURN) {
+		g_turn_histories[*out_count].history = history;
+		g_turn_histories[*out_count].num_actions = num_actions;
+		(*out_count)++;
+		return;
+	}
+	legal = gto_get_legal_actions(&state);
+	for (a = 0; a < MAX_ACTIONS && *out_count < MAX_TURN_HISTORIES; a++) {
+		if (!(legal & (1u << a)))
+			continue;
+		enumerate_turn_histories_rec(
+			history | ((uint64_t)(a & 7) << (num_actions * BITS_PER_ACTION)),
+			num_actions + 1,
+			flop_board, preset_turn_card,
+			out_count
+		);
+	}
+}
+
+static int enumerate_turn_histories(uint64_t flop_board, uint64_t preset_turn_card) {
+	g_turn_history_count = 0;
+	enumerate_turn_histories_rec(0, 0, flop_board, preset_turn_card, &g_turn_history_count);
+	return g_turn_history_count;
+}
+
+/* Phase 2: turn subgame. Preset turn, random river. Samples a flop line that reaches the turn. */
+typedef struct {
+	FlopSolver *fs;
+	int thread_id;
+	int n_iters;
+	unsigned int base_seed;
+	int actual_iters;
+	int turn_history_count;
+} phase2_arg_t;
+
+static void *solve_phase2_worker(void *arg) {
+	phase2_arg_t *w = (phase2_arg_t *)arg;
+	FlopSolver *fs = w->fs;
+	int iter;
+	gto_rng_seed(w->base_seed + (unsigned)w->thread_id);
+	for (iter = 0; iter < w->n_iters; iter++) {
+		uint64_t p1 = sample_hand_from_cache(
+			fs->oop_combo_hands, fs->oop_combo_cum_weights,
+			fs->oop_combo_count, fs->oop_combo_total_weight
+		);
+		uint64_t p2 = sample_hand_from_cache(
+			fs->ip_combo_hands, fs->ip_combo_cum_weights,
+			fs->ip_combo_count, fs->ip_combo_total_weight
+		);
+		if (!p1 || !p2 || (p1 & p2)) continue;
+		if ((p1 & fs->board) || (p2 & fs->board)) continue;
+		if ((p1 & fs->preset_turn_card) || (p2 & fs->preset_turn_card)) continue;
+		if (w->turn_history_count <= 0) continue;
+		{
+			int idx = (int)(gto_rng_uniform() * (float)w->turn_history_count);
+			if (idx >= w->turn_history_count) idx = w->turn_history_count - 1;
+			if (idx < 0) continue;
+			uint64_t hist = g_turn_histories[idx].history;
+			int na = g_turn_histories[idx].num_actions;
+			GameState state;
+			gto_replay_postflop_history(
+				hist, fs->board, fs->preset_turn_card, 0, na, &state
+			);
+			state.p1_hand = p1;
+			state.p2_hand = p2;
+			gto_mccfr(state, P1);
+			gto_replay_postflop_history(hist, fs->board, fs->preset_turn_card, 0, na, &state);
+			state.p1_hand = p1;
+			state.p2_hand = p2;
+			gto_mccfr(state, P2);
+		}
+	}
+	w->actual_iters = iter;
+	return NULL;
+}
 
 static uint64_t g_flop_board;
 
@@ -204,72 +284,18 @@ void flop_solver_set_ranges(FlopSolver *fs,
 }
 
 void flop_solver_begin_parallel_solve(FlopSolver *fs) {
-	int nthreads, t;
-	HashTable **tables;
 	if (!fs) return;
-	nthreads = get_solver_thread_count();
 	fs->parallel_accumulate = 1;
-	fs->parallel_nthreads = nthreads;
+	fs->parallel_nthreads = get_solver_thread_count();
 	fs->parallel_thread_tables = NULL;
-	if (nthreads <= 1)
-		return;
 	if (fs->iterations_done == 0) {
 		init_gto_table();
 		gto_rng_seed((unsigned)time(NULL));
 	}
-	tables = (HashTable **)malloc((size_t)nthreads * sizeof(HashTable *));
-	if (!tables) {
-		fs->parallel_accumulate = 0;
-		fs->parallel_nthreads = 0;
-		return;
-	}
-	for (t = 0; t < nthreads; t++) {
-		tables[t] = (HashTable *)malloc((size_t)TABLE_SIZE * sizeof(HashTable));
-		if (!tables[t]) {
-			while (t--) free(tables[t]);
-			free(tables);
-			fs->parallel_accumulate = 0;
-			fs->parallel_nthreads = 0;
-			return;
-		}
-		gto_init_table(tables[t]);
-	}
-	fs->parallel_thread_tables = tables;
 }
 
 void flop_solver_end_parallel_solve(FlopSolver *fs) {
-	HashTable **thread_tables;
-	int nthreads, t;
 	if (!fs || !fs->parallel_accumulate) return;
-	nthreads = fs->parallel_nthreads;
-	thread_tables = (HashTable **)fs->parallel_thread_tables;
-	if (thread_tables && nthreads > 1) {
-		merge_progress_ctx_t mctx;
-		mctx.fs = fs;
-		mctx.nthreads = nthreads;
-		if (fs->before_merge_cb)
-			fs->before_merge_cb(fs->before_merge_user);
-		if (fs->merge_progress_cb)
-			fs->merge_progress_cb(fs->merge_progress_user, 0, nthreads * TABLE_SIZE);
-		for (t = 0; t < nthreads; t++) {
-			mctx.step = t;
-			int saturated = gto_merge_table_into(gto_table, thread_tables[t],
-				fs->merge_progress_cb ? merge_progress_wrapper : NULL,
-				fs->merge_progress_cb ? &mctx : NULL);
-			free(thread_tables[t]);
-			thread_tables[t] = NULL;
-			if (saturated) {
-				for (t++; t < nthreads; t++) {
-					free(thread_tables[t]);
-					thread_tables[t] = NULL;
-				}
-				break;
-			}
-		}
-		if (fs->merge_progress_cb)
-			fs->merge_progress_cb(fs->merge_progress_user, nthreads * TABLE_SIZE, nthreads * TABLE_SIZE);
-		free(thread_tables);
-	}
 	fs->parallel_thread_tables = NULL;
 	fs->parallel_nthreads = 0;
 	fs->parallel_accumulate = 0;
@@ -295,7 +321,6 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 	}
 	if (fs->oop_combo_count <= 0 || fs->ip_combo_count <= 0)
 		return;
-	/* Preserve table across chunked solve calls; reset only at start of a fresh solve. */
 	if (!fs->parallel_accumulate && fs->iterations_done == 0) {
 		init_gto_table();
 		gto_rng_seed((unsigned)time(NULL));
@@ -303,13 +328,9 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 
 	{
 		int nthreads = fs->parallel_accumulate ? fs->parallel_nthreads : get_solver_thread_count();
-		HashTable **thread_table_ptrs = fs->parallel_accumulate ? (HashTable **)fs->parallel_thread_tables : NULL;
-		HashTable *thread_tables_block = NULL;  /* single block only when !parallel_accumulate */
-		int alloc_tables = 0;
 		int actual_total = n_iterations;
 
 		if (nthreads <= 1) {
-			gto_reset_table_saturation();
 			for (int iter = 0; iter < n_iterations; iter++) {
 				uint64_t p1 = sample_hand_from_cache(
 					fs->oop_combo_hands, fs->oop_combo_cum_weights,
@@ -330,10 +351,6 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 					&state, p1, p2, fs->board, fs->preset_turn_card, fs->preset_river_card
 				);
 				gto_mccfr(state, P2);
-				if ((iter & 0xFF) == 0 && iter > 0 && gto_is_table_saturated()) {
-					actual_total = iter;
-					break;
-				}
 			}
 		} else {
 			pthread_t *threads;
@@ -343,18 +360,9 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 			int remainder = n_iterations % nthreads;
 			int t;
 
-			if (!thread_table_ptrs) {
-				thread_tables_block = (HashTable *)malloc((size_t)nthreads * TABLE_SIZE * sizeof(HashTable));
-				alloc_tables = 1;
-				if (!thread_tables_block) return;
-				for (t = 0; t < nthreads; t++)
-					gto_init_table(thread_tables_block + (size_t)t * TABLE_SIZE);
-			}
-
 			threads = (pthread_t *)malloc((size_t)nthreads * sizeof(pthread_t));
 			args = (worker_arg_t *)malloc((size_t)nthreads * sizeof(worker_arg_t));
 			if (!threads || !args) {
-				if (alloc_tables) free(thread_tables_block);
 				free(threads);
 				free(args);
 				return;
@@ -364,13 +372,11 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 				args[t].thread_id = t;
 				args[t].n_iters = iters_per_thread + (t < remainder ? 1 : 0);
 				args[t].base_seed = base_seed;
-				args[t].table = thread_table_ptrs ? thread_table_ptrs[t] : (thread_tables_block + (size_t)t * TABLE_SIZE);
 			}
 			for (t = 0; t < nthreads; t++) {
 				if (pthread_create(&threads[t], NULL, solve_worker, &args[t]) != 0) {
 					for (t--; t >= 0; t--)
 						pthread_join(threads[t], NULL);
-					if (alloc_tables) free(thread_tables_block);
 					free(threads);
 					free(args);
 					return;
@@ -383,32 +389,143 @@ void flop_solver_solve(FlopSolver *fs, int n_iterations) {
 				actual_total += args[t].actual_iters;
 			free(threads);
 			free(args);
-
-			if (!fs->parallel_accumulate) {
-				HashTable *merge_src = thread_tables_block;
-				merge_progress_ctx_t mctx;
-				mctx.fs = fs;
-				mctx.nthreads = nthreads;
-				if (fs->before_merge_cb)
-					fs->before_merge_cb(fs->before_merge_user);
-				if (fs->merge_progress_cb)
-					fs->merge_progress_cb(fs->merge_progress_user, 0, nthreads * TABLE_SIZE);
-				for (t = 0; t < nthreads; t++) {
-					mctx.step = t;
-					if (gto_merge_table_into(gto_table, merge_src + (size_t)t * TABLE_SIZE,
-						fs->merge_progress_cb ? merge_progress_wrapper : NULL,
-						fs->merge_progress_cb ? &mctx : NULL) != 0)
-						break;
-				}
-				if (fs->merge_progress_cb)
-					fs->merge_progress_cb(fs->merge_progress_user, nthreads * TABLE_SIZE, nthreads * TABLE_SIZE);
-				if (alloc_tables)
-					free(thread_tables_block);
-			}
 		}
 		fs->solved = 1;
 		fs->iterations_done += actual_total;
 	}
+}
+
+/* Phase 2: turn subgame with preset turn, random river. Requires combo cache and turn histories built. */
+static void flop_solver_solve_phase2(FlopSolver *fs, int n_iterations) {
+	int nthreads = fs->parallel_accumulate ? fs->parallel_nthreads : get_solver_thread_count();
+	int actual_total = n_iterations;
+
+	if (nthreads <= 1) {
+		int iter;
+		for (iter = 0; iter < n_iterations; iter++) {
+			uint64_t p1 = sample_hand_from_cache(
+				fs->oop_combo_hands, fs->oop_combo_cum_weights,
+				fs->oop_combo_count, fs->oop_combo_total_weight
+			);
+			uint64_t p2 = sample_hand_from_cache(
+				fs->ip_combo_hands, fs->ip_combo_cum_weights,
+				fs->ip_combo_count, fs->ip_combo_total_weight
+			);
+			if (!p1 || !p2 || (p1 & p2)) continue;
+			if ((p1 & fs->board) || (p2 & fs->board)) continue;
+			if ((p1 & fs->preset_turn_card) || (p2 & fs->preset_turn_card)) continue;
+			if (g_turn_history_count <= 0) continue;
+			{
+				int idx = (int)(gto_rng_uniform() * (float)g_turn_history_count);
+				if (idx >= g_turn_history_count) idx = g_turn_history_count - 1;
+				if (idx < 0) continue;
+				uint64_t hist = g_turn_histories[idx].history;
+				int na = g_turn_histories[idx].num_actions;
+				GameState state;
+				gto_replay_postflop_history(
+					hist, fs->board, fs->preset_turn_card, 0, na, &state
+				);
+				state.p1_hand = p1;
+				state.p2_hand = p2;
+				gto_mccfr(state, P1);
+				gto_replay_postflop_history(hist, fs->board, fs->preset_turn_card, 0, na, &state);
+				state.p1_hand = p1;
+				state.p2_hand = p2;
+				gto_mccfr(state, P2);
+			}
+		}
+	} else {
+		pthread_t *threads;
+		phase2_arg_t *args;
+		unsigned int base_seed = (unsigned)time(NULL);
+		int iters_per_thread = n_iterations / nthreads;
+		int remainder = n_iterations % nthreads;
+		int t;
+
+		threads = (pthread_t *)malloc((size_t)nthreads * sizeof(pthread_t));
+		args = (phase2_arg_t *)malloc((size_t)nthreads * sizeof(phase2_arg_t));
+		if (!threads || !args) {
+			free(threads);
+			free(args);
+			return;
+		}
+		for (t = 0; t < nthreads; t++) {
+			args[t].fs = fs;
+			args[t].thread_id = t;
+			args[t].n_iters = iters_per_thread + (t < remainder ? 1 : 0);
+			args[t].base_seed = base_seed;
+			args[t].turn_history_count = g_turn_history_count;
+		}
+		for (t = 0; t < nthreads; t++) {
+			if (pthread_create(&threads[t], NULL, solve_phase2_worker, &args[t]) != 0) {
+				for (t--; t >= 0; t--)
+					pthread_join(threads[t], NULL);
+				free(threads);
+				free(args);
+				return;
+			}
+		}
+		for (t = 0; t < nthreads; t++)
+			pthread_join(threads[t], NULL);
+		actual_total = 0;
+		for (t = 0; t < nthreads; t++)
+			actual_total += args[t].actual_iters;
+		free(threads);
+		free(args);
+	}
+	fs->iterations_done += actual_total;
+}
+
+/* Two-phase solve: Phase 1 = flop with random turn/river; Phase 2 = turn subgame with preset_turn, random river.
+ * Restores preset_river_card for display when user provided 5 cards (display_river). */
+void flop_solver_solve_two_phase(FlopSolver *fs, int phase1_iters, int phase2_iters, uint64_t display_river) {
+	uint64_t saved_turn, saved_river;
+	if (!fs || phase1_iters <= 0 || phase2_iters <= 0) return;
+	saved_turn = fs->preset_turn_card;
+	saved_river = fs->preset_river_card;
+
+	/* Phase 1: no clairvoyance at flop */
+	fs->preset_turn_card = 0;
+	fs->preset_river_card = 0;
+	fs->combo_cache_valid = 0;
+	flop_solver_solve(fs, phase1_iters);
+
+	/* Phase 2: preset turn, random river */
+	if (saved_turn == 0) {
+		/* No preset turn (user gave only 3 cards); no Phase 2 */
+		fs->preset_turn_card = 0;
+		fs->preset_river_card = saved_river;
+		return;
+	}
+	fs->preset_turn_card = saved_turn;
+	fs->preset_river_card = 0;
+	fs->combo_cache_valid = 0;  /* Rebuild cache with turn card as dead */
+	if (!fs->combo_cache_valid) {
+		uint64_t dead_cards = fs->board | fs->preset_turn_card;
+		build_weighted_combo_cache(
+			fs->oop_weights, dead_cards,
+			fs->oop_combo_hands, fs->oop_combo_cum_weights,
+			&fs->oop_combo_count, &fs->oop_combo_total_weight
+		);
+		build_weighted_combo_cache(
+			fs->ip_weights, dead_cards,
+			fs->ip_combo_hands, fs->ip_combo_cum_weights,
+			&fs->ip_combo_count, &fs->ip_combo_total_weight
+		);
+		fs->combo_cache_valid = 1;
+	}
+	if (fs->oop_combo_count <= 0 || fs->ip_combo_count <= 0) {
+		fs->preset_river_card = saved_river;
+		return;
+	}
+	if (enumerate_turn_histories(fs->board, fs->preset_turn_card) <= 0) {
+		fs->preset_river_card = saved_river;
+		return;
+	}
+	flop_solver_solve_phase2(fs, phase2_iters);
+
+	/* Restore preset_river for display (e.g. when user gave 5 cards) */
+	fs->preset_river_card = display_river;
 }
 
 int flop_solver_get_hand_strategy_with_runout(

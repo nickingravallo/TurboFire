@@ -37,7 +37,7 @@ static int g_solving;
 static int g_merging;  /* 1 = inside merge phase (workers done, merging into global table) */
 static int g_merge_current;  /* merge step (0..g_merge_total) */
 static int g_merge_total;    /* total merge steps (thread count) */
-static int g_iterations = 10000000;
+static int g_iterations = 30000000;
 static int g_has_colors;
 static int g_solve_done_iters;
 static int g_solve_target_iters;
@@ -415,27 +415,6 @@ static void redraw_status(WINDOW *win) {
 	wrefresh(win);
 }
 
-static void on_before_merge(void *user) {
-	g_merging = 1;
-	g_merge_current = 0;
-	g_merge_total = 0;
-	WINDOW *status_win = (WINDOW *)user;
-	if (status_win) {
-		redraw_status(status_win);
-		wrefresh(status_win);
-	}
-}
-
-static void on_merge_progress(void *user, int current, int total) {
-	g_merge_current = current;
-	g_merge_total = total;
-	WINDOW *status_win = (WINDOW *)user;
-	if (status_win) {
-		redraw_status(status_win);
-		wrefresh(status_win);
-	}
-}
-
 static int run_tui(const char *oop_path, const char *ip_path, const char *board_str, uint64_t board, int board_cards) {
 	(void)board_str;
 	(void)board;
@@ -452,7 +431,11 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 		init_pair(1, COLOR_WHITE, COLOR_BLACK);
 		init_pair(2, COLOR_BLUE, COLOR_BLACK);
 		init_pair(3, COLOR_GREEN, COLOR_BLACK);
-		if (can_change_color()) {
+		int use_custom_colors = 0;
+#if !defined(__linux__)
+		if (can_change_color()) use_custom_colors = 1;
+#endif
+		if (use_custom_colors) {
 			/* Three red shades: light (R33), medium (R52), dark (R100). Reuse RED, YELLOW, MAGENTA. */
 			init_color(COLOR_RED, 627, 0, 0);       /* dark red */
 			init_color(COLOR_YELLOW, 863, 235, 235); /* medium red */
@@ -549,47 +532,44 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 			g_cursor_row = (g_cursor_row < GRID_SIZE - 1) ? g_cursor_row + 1 : GRID_SIZE - 1;
 		} else if (ch == 'S') {
 			if (!g_solving && !g_fs.solved) {
-				double start_t = now_seconds();
-				g_solving = 1;
-				g_merging = 0;
-				g_fs.before_merge_cb = on_before_merge;
-				g_fs.before_merge_user = status_win;
-				g_fs.merge_progress_cb = on_merge_progress;
-				g_fs.merge_progress_user = status_win;
-				g_solve_done_iters = 0;
+			double start_t = now_seconds();
+			g_solving = 1;
+			g_merging = 0;
+			g_solve_done_iters = 0;
 				g_solve_target_iters = g_iterations;
 				g_solve_elapsed_sec = 0.0;
 				flop_solver_begin_parallel_solve(&g_fs);
-				/* Chunk size = 1% of target (min 250) so progress updates every ~1% */
-				const int chunk_iters = (g_solve_target_iters >= 100)
-					? (g_solve_target_iters + 99) / 100
-					: g_solve_target_iters;
-				const int step = (chunk_iters >= 250) ? chunk_iters : 250;
-				while (g_solve_done_iters < g_solve_target_iters) {
-					g_merging = 0;
-					int n = step;
-					if (n > g_solve_target_iters - g_solve_done_iters)
-						n = g_solve_target_iters - g_solve_done_iters;
-					int prev_done = g_fs.iterations_done;
-					flop_solver_solve(&g_fs, n);
-					g_merging = 0;
-					int chunk_actual = g_fs.iterations_done - prev_done;
+				if (g_fs.preset_turn_card != 0) {
+					/* Two-phase: Phase 1 = flop random turn/river; Phase 2 = turn subgame preset turn, random river */
+					uint64_t display_river = g_fs.preset_river_card;
+					int p1 = g_solve_target_iters / 2;
+					int p2 = g_solve_target_iters - p1;
+					flop_solver_solve_two_phase(&g_fs, p1, p2, display_river);
 					g_solve_done_iters = g_fs.iterations_done;
-					g_solve_elapsed_sec = now_seconds() - start_t;
-					if (chunk_actual < n)
-						g_solve_target_iters = g_solve_done_iters;
-					redraw_status(status_win);
+				} else {
+					/* Single solve (3 cards or -f). Cap step so progress bar updates often (avoid appearing frozen). */
+					const int chunk_iters = (g_solve_target_iters >= 100)
+						? (g_solve_target_iters + 99) / 100
+						: g_solve_target_iters;
+					const int step = (chunk_iters >= 250) ? chunk_iters : 250;
+					const int max_step = 50000;  /* redraw at least every 50k iters so UI responds */
+					while (g_solve_done_iters < g_solve_target_iters) {
+						g_merging = 0;
+						int n = (step <= max_step) ? step : max_step;
+						if (n > g_solve_target_iters - g_solve_done_iters)
+							n = g_solve_target_iters - g_solve_done_iters;
+						flop_solver_solve(&g_fs, n);
+						g_solve_done_iters = g_fs.iterations_done;
+						g_solve_elapsed_sec = now_seconds() - start_t;
+						redraw_status(status_win);
+					}
 				}
-				flop_solver_end_parallel_solve(&g_fs);
-				g_solving = 0;
-				g_merging = 0;
-				g_merge_current = 0;
-				g_merge_total = 0;
-				g_fs.before_merge_cb = NULL;
-				g_fs.before_merge_user = NULL;
-				g_fs.merge_progress_cb = NULL;
-				g_fs.merge_progress_user = NULL;
-				g_solve_elapsed_sec = now_seconds() - start_t;
+			flop_solver_end_parallel_solve(&g_fs);
+			g_solving = 0;
+			g_merging = 0;
+			g_merge_current = 0;
+			g_merge_total = 0;
+			g_solve_elapsed_sec = now_seconds() - start_t;
 			}
 		}
 	}
@@ -600,14 +580,107 @@ static int run_tui(const char *oop_path, const char *ip_path, const char *board_
 	return 0;
 }
 
+static int export_strategy_json(const char *path, const char *board_str) {
+	FILE *f = fopen(path, "w");
+	if (!f) { perror(path); return -1; }
+
+	GameState oop_state, ip_state;
+	flop_solver_get_state_at_history(&g_fs, 0, 0, &oop_state);
+	flop_solver_get_state_at_history(&g_fs, 0, 1, &ip_state);
+
+	fprintf(f, "{\n");
+	fprintf(f, "  \"board\": \"%s\",\n", board_str);
+	fprintf(f, "  \"iterations\": %d,\n", g_fs.iterations_done);
+	fprintf(f, "  \"pot_bb\": %.2f,\n", (double)STARTING_FLOP_POT_BB);
+	fprintf(f, "  \"stack_bb\": %.2f,\n", (double)STARTING_STACK_BB);
+
+	const char *sections[] = { "oop_strategy", "ip_vs_check" };
+	const uint64_t histories[] = { 0, 0 };
+	const int num_acts[] = { 0, 1 };
+	const float (*weights_arr[])[GRID_SIZE] = { g_fs.oop_weights, g_fs.ip_weights };
+
+	for (int sec = 0; sec < 2; sec++) {
+		fprintf(f, "  \"%s\": {\n", sections[sec]);
+		int first_hand = 1;
+		for (int r = 0; r < GRID_SIZE; r++) {
+			for (int c = 0; c < GRID_SIZE; c++) {
+				if (weights_arr[sec][r][c] <= 0.0f) continue;
+				float probs[FLOP_MAX_ACTIONS];
+				int na;
+				if (flop_solver_get_strategy_at_history(&g_fs, histories[sec], num_acts[sec],
+					r, c, probs, &na) != 0)
+					continue;
+				char hand_str[8];
+				hand_at(r, c, hand_str, sizeof(hand_str));
+				if (!first_hand) fprintf(f, ",\n");
+				first_hand = 0;
+				fprintf(f, "    \"%s\": {", hand_str);
+				const char *const *labels = (na <= 4) ? OOP_ACTION_LABELS : IP_BET_ACTION_LABELS;
+				for (int a = 0; a < na; a++) {
+					fprintf(f, "\"%s\": %.4f", labels[a], (double)probs[a]);
+					if (a < na - 1) fprintf(f, ", ");
+				}
+				fprintf(f, "}");
+			}
+		}
+		fprintf(f, "\n  }%s\n", sec < 1 ? "," : "");
+	}
+
+	fprintf(f, "}\n");
+	fclose(f);
+	return 0;
+}
+
+static int run_headless_solve(const char *board_str, const char *export_path) {
+	double start_t = now_seconds();
+	fprintf(stderr, "Solving %s for %d iterations...\n", board_str, g_iterations);
+
+	init_gto_table();
+	flop_solver_begin_parallel_solve(&g_fs);
+
+	if (g_fs.preset_turn_card != 0) {
+		uint64_t display_river = g_fs.preset_river_card;
+		int p1 = g_iterations / 2;
+		int p2 = g_iterations - p1;
+		fprintf(stderr, "  Two-phase: Phase 1 (flop) %d iters, Phase 2 (turn subgame) %d iters\n", p1, p2);
+		flop_solver_solve_two_phase(&g_fs, p1, p2, display_river);
+	} else {
+		int target = g_iterations;
+		int done = 0;
+		const int chunk = (target >= 100) ? (target + 99) / 100 : target;
+		const int step = (chunk >= 250) ? chunk : 250;
+
+		while (done < target) {
+			int n = step;
+			if (n > target - done) n = target - done;
+			int prev = g_fs.iterations_done;
+			flop_solver_solve(&g_fs, n);
+			int actual = g_fs.iterations_done - prev;
+			done = g_fs.iterations_done;
+			double elapsed = now_seconds() - start_t;
+			int pct = (int)((double)done / (double)target * 100.0 + 0.5);
+			fprintf(stderr, "\r  %3d%%  (%d/%d)  %.1fs", pct, done, target, elapsed);
+			if (actual < n) break;
+		}
+	}
+
+	flop_solver_end_parallel_solve(&g_fs);
+	double elapsed = now_seconds() - start_t;
+	fprintf(stderr, "\nDone in %.1fs. Exporting to %s\n", elapsed, export_path);
+
+	return export_strategy_json(export_path, board_str);
+}
+
 int main(int argc, char **argv) {
 	const char *oop_path = NULL;
 	const char *ip_path = NULL;
 	const char *board_str = NULL;
+	const char *export_path = NULL;
 	int user_iters = 0;
+	int flop_only = 0;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "i:")) != -1) {
+	while ((opt = getopt(argc, argv, "i:e:f")) != -1) {
 		switch (opt) {
 		case 'i': {
 			char *end;
@@ -619,8 +692,14 @@ int main(int argc, char **argv) {
 			user_iters = (int)val;
 			break;
 		}
+		case 'e':
+			export_path = optarg;
+			break;
+		case 'f':
+			flop_only = 1;
+			break;
 		default:
-			fprintf(stderr, "Usage: %s [-i iterations] <oop_range.json> <ip_range.json> <board>\n", argv[0]);
+			fprintf(stderr, "Usage: %s [-i iterations] [-e output.json] [-f] <oop_range.json> <ip_range.json> <board>\n", argv[0]);
 			return 1;
 		}
 	}
@@ -630,8 +709,11 @@ int main(int argc, char **argv) {
 		ip_path = argv[optind + 1];
 		board_str = argv[optind + 2];
 	} else {
-		fprintf(stderr, "Usage: %s [-i iterations] <oop_range.json> <ip_range.json> <board>\n", argv[0]);
-		fprintf(stderr, "  e.g. %s -i 5000000 data/ranges/oop.json data/ranges/ip.json AhKhQd3c4d\n", argv[0]);
+		fprintf(stderr, "Usage: %s [-i iterations] [-e output.json] [-f] <oop_range.json> <ip_range.json> <board>\n", argv[0]);
+		fprintf(stderr, "  -f  flop-only: ignore 4th/5th board cards; turn/river dealt randomly (GTO flop strategy)\n");
+		fprintf(stderr, "  e.g. %s -i 5000000 ranges/sb-hu.json ranges/btn-hu.json Kh8s6s\n", argv[0]);
+		fprintf(stderr, "  e.g. %s -f -i 5000000 ranges/sb-hu.json ranges/btn-hu.json Kh8s6sQhTc  (flop only, random runout)\n", argv[0]);
+		fprintf(stderr, "  e.g. %s -i 2000000 -e result.json ranges/sb-hu.json ranges/btn-hu.json Kh8s6s\n", argv[0]);
 		return 1;
 	}
 
@@ -673,6 +755,17 @@ int main(int argc, char **argv) {
 			preset_river_card = ordered_cards[4];
 	}
 
+	/* -f flop-only: ignore 4th/5th cards; turn/river dealt randomly each time we reach those streets */
+	if (flop_only && board_cards > 3) {
+		preset_turn_card = 0;
+		preset_river_card = 0;
+		{
+			char flop_preview[8];
+			snprintf(flop_preview, sizeof(flop_preview), "%.6s", board_str ? board_str : "");
+			fprintf(stderr, "Flop-only mode: using only flop %s; turn/river random per traversal.\n", flop_preview);
+		}
+	}
+
 	flop_solver_set_board_runout(&g_fs, board, preset_turn_card, preset_river_card);
 	flop_solver_set_ranges(&g_fs, oop_grid, ip_grid);
 
@@ -682,5 +775,8 @@ int main(int argc, char **argv) {
 	init_rank_map();
 	init_flush_map();
 	srand((unsigned)time(NULL));
+
+	if (export_path)
+		return run_headless_solve(board_str, export_path);
 	return run_tui(oop_path, ip_path, board_str, board, board_cards);
 }

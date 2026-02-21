@@ -8,8 +8,8 @@
 #include <omp.h>
 #endif
 
-#include "gto_solver.h"
-#include "ranks.h"
+#include "../include/gto_solver.h"
+#include "../include/ranks.h"
 
 /* Thread-local RNG (xorshift64) for solver and sampling. */
 static _Thread_local uint64_t gto_rng_state;
@@ -61,7 +61,6 @@ void gto_clear_thread_table(void) {
 void gto_init_table(HashTable *table) {
 	int i;
 	if (!table) return;
-	memset(table, 0, (size_t)TABLE_SIZE * sizeof(HashTable));
 	for (i = 0; i < TABLE_SIZE; i++)
 		table[i].key = EMPTY_MAGIC;
 }
@@ -121,38 +120,32 @@ uint64_t make_info_set_key(
 	return key;
 }
 
-/* Lock-free get-or-create using atomic CAS on the key field.
- * Safe for concurrent use by multiple threads on a shared table.
- * The table must be zero-initialized (gto_init_table) before first use. */
+// Get or create information set node (uses thread table if set, else global)
 InfoSet* gto_get_or_create_node(uint64_t key) {
 	HashTable *tbl = gto_current_table();
 	uint64_t hash_idx;
+	int i;
 	unsigned int probes = 0;
-
-	hash_idx = hash_key(key);
-	while (probes < MAX_PROBE_LEN) {
-		uint64_t existing = __atomic_load_n(&tbl[hash_idx].key, __ATOMIC_RELAXED);
-
-		if (existing == key)
+	
+	hash_idx = hash_key(key) % TABLE_SIZE;
+	while (tbl[hash_idx].key != EMPTY_MAGIC) {
+		if (tbl[hash_idx].key == key)
 			return &tbl[hash_idx].infoSet;
-
-		if (existing == EMPTY_MAGIC) {
-			uint64_t expected = EMPTY_MAGIC;
-			if (__atomic_compare_exchange_n(&tbl[hash_idx].key, &expected, key,
-			                                0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-				tbl[hash_idx].infoSet.key = key;
-				return &tbl[hash_idx].infoSet;
-			}
-			if (__atomic_load_n(&tbl[hash_idx].key, __ATOMIC_RELAXED) == key)
-				return &tbl[hash_idx].infoSet;
-		}
-
 		hash_idx = (hash_idx + 1) % TABLE_SIZE;
-		probes++;
+		if (++probes >= MAX_PROBE_LEN) {
+			gto_insert_fail_count++;
+			return NULL;
+		}
 	}
-
-	gto_insert_fail_count++;
-	return NULL;
+	
+	/* Empty slot found */
+	tbl[hash_idx].key = key;
+	for (i = 0; i < MAX_ACTIONS; i++) {
+		tbl[hash_idx].infoSet.regret_sum[i] = 0;
+		tbl[hash_idx].infoSet.strategy_sum[i] = 0;
+	}
+	tbl[hash_idx].infoSet.key = key;
+	return &tbl[hash_idx].infoSet;
 }
 
 InfoSet* gto_get_node(uint64_t key) {
@@ -230,14 +223,15 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 	state->p1_hand = p1_hand;
 	state->p2_hand = p2_hand;
 	state->board = 0;
-	state->pot = 1.5f;  // SB + BB
-	state->to_call = 0.0f;
+	state->pot = 1.5f;  // SB (0.5) + BB (1.0)
+	// SB (P1) matches BB (1.0) by calling 0.5.
+	state->to_call = 0.5f; 
 	state->p1_stack = STARTING_STACK_BB;
 	state->p2_stack = STARTING_STACK_BB;
 	state->p1_contribution = 0.5f;
 	state->p2_contribution = 1.0f;
 	state->street = STREET_PREFLOP;
-	state->active_player = P1;
+	state->active_player = P1; // SB acts first in HU Preflop
 	state->num_actions_this_street = 0;
 	state->num_raises_this_street = 0;
 	state->num_actions_total = 0;
@@ -246,12 +240,50 @@ void init_game_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
 	state->is_terminal = false;
 }
 
-/* Bet fractions (pot): 0=check, 33, 52, 100 */
-static const int BET_PCT[] = { 0, 33, 52, 100 };
-/* Raise fractions (pot) for IP: 33, 52, 100 */
-static const int RAISE_PCT[] = { 33, 52, 100 };
+// Initialize BTN vs SB game state (P1=BTN, P2=SB, BB dead money in pot)
+void init_game_state_btn_sb(GameState* state, uint64_t p1_hand, uint64_t p2_hand) {
+	memset(state, 0, sizeof(GameState));
+	state->p1_hand = p1_hand;
+	state->p2_hand = p2_hand;
+	state->board = 0;
+	state->pot = 1.5f;             // SB (0.5) + BB dead (1.0)
+	state->to_call = 1.0f;         // BTN must match BB's 1.0 to play
+	state->p1_stack = 100.0f;      // BTN: full stack, nothing posted
+	state->p2_stack = 99.5f;       // SB: posted 0.5
+	state->p1_contribution = 0.0f; // BTN has nothing in pot
+	state->p2_contribution = 0.5f; // SB blind
+	state->street = STREET_PREFLOP;
+	state->active_player = P1;     // BTN acts first
+	state->num_actions_this_street = 0;
+	state->num_raises_this_street = 0;
+	state->num_actions_total = 0;
+	state->last_action = 0;
+	state->facing_bet = false;
+	state->is_terminal = false;
+}
+
+/* Bet fractions (pot) for BB option after limp: 0=check, 75, 150, 300 */
+static const int BET_PCT[] = { 0, 75, 150, 300 };
+/* Raise fractions (pot) for facing bet: 100, 200, 500 */
+static const int RAISE_PCT[] = { 100, 200, 500 };
+
+/*
+ * Preflop sizing cheat-sheet (SB open, pot=1.5, to_call=0.5):
+ *   100% pot: commit = 0.5 + 1.5 = 2.0 -> SB total 2.5bb (standard open)
+ *   200% pot: commit = 0.5 + 3.0 = 3.5 -> SB total 4.0bb
+ *   500% pot: commit = 0.5 + 7.5 = 8.0 -> SB total 8.5bb (or all-in cap)
+ *
+ * BB 3-bet vs 2.5bb open (pot=3.5, to_call=1.5):
+ *   100% pot: commit = 1.5 + 3.5 = 5.0 -> BB total 6.0bb
+ *   200% pot: commit = 1.5 + 7.0 = 8.5 -> BB total 9.5bb
+ *   500% pot: commit = 1.5 + 17.5 -> capped at stack
+ *
+ * BB option after SB limp (pot=2.0, to_call=0):
+ *   75% pot: bet 1.5bb   150% pot: bet 3.0bb   300% pot: bet 6.0bb
+ */
+
 /* Keep tree finite to avoid runaway recursion in deep lines. */
-#define MAX_RAISES_PER_STREET 2
+#define MAX_RAISES_PER_STREET 4
 
 void gto_init_postflop_state(
 	GameState* state, uint64_t p1_hand, uint64_t p2_hand,
@@ -341,9 +373,26 @@ uint8_t gto_get_legal_actions(GameState* state) {
 	if (!state)
 		return 0;
 	actor_stack = (state->active_player == P1) ? state->p1_stack : state->p2_stack;
-	if (state->street < STREET_FLOP || state->street > STREET_RIVER)
+	
+    // Allow Preflop
+	if (state->street > STREET_RIVER)
 		return 0;
-	if (state->facing_bet) {
+        
+    // Preflop Special Case: SB (First Action) - behaves like facing bet (Fold/Call/Raise) or Open?
+    // In HU, SB posts 0.5, BB 1.0. SB acts first.
+    // SB can Fold (0), Call (1), Raise (2..4).
+    // This looks like "Facing Bet" logic (Fold/Call/Raise).
+    // EXCEPT: "Facing Bet" logic usually assumes facing a bet > 0.
+    // Here to_call = 0.5.
+    
+    // BB Option (Facing Limp): BB has 1.0, SB called (1.0). to_call = 0.
+    // BB can Check (0), Raise (1..3 using Bet logic).
+    
+    // So if Preflop:
+    //   If to_call > 0: Use Facing Bet logic (Fold/Call/Raise).
+    //   If to_call == 0: Use Check/Bet logic (Check/Raise).
+    
+	if (state->facing_bet || (state->street == STREET_PREFLOP && state->to_call > 0.0f)) {
 		/* Facing bet: Fold(0), Call(1), optional Raise33/52/100 (2..4). */
 		legal_mask |= (1u << 0);
 		if (actor_stack > 0.0f)
@@ -400,7 +449,7 @@ static void gto_advance_to_next_street(GameState *state) {
 		state->street++;
 		state->num_actions_this_street = 0;
 		state->num_raises_this_street = 0;
-		state->active_player = P1;
+		state->active_player = P1; // Usually OOP (P1) acts first postflop
 		state->last_action = 0;
 		state->facing_bet = false;
 		/* Add preset turn/river card to board when advancing streets */
@@ -439,10 +488,11 @@ GameState gto_apply_action(GameState state, int action_id) {
 	actor_stack = (state.active_player == P1) ? &state.p1_stack : &state.p2_stack;
 	actor_contribution = (state.active_player == P1) ? &state.p1_contribution : &state.p2_contribution;
 
-	if (state.facing_bet) {
-		/* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise52, 4=Raise100 */
+	if (state.facing_bet || (state.street == STREET_PREFLOP && state.to_call > 0.0f)) {
+		/* Facing bet (or Preflop Open): 0=Fold, 1=Call, 2=Raise33, 3=Raise52, 4=Raise100 */
 		if (action_id == 0) {
 			state.is_terminal = true;
+			state.facing_bet = true; // Ensure fold is attributed correctly
 			return state;
 		}
 		if (action_id == 1) {
@@ -452,7 +502,23 @@ GameState gto_apply_action(GameState state, int action_id) {
 			*actor_contribution += call_commit;
 			state.pot += call_commit;
 			state.to_call = 0.0f;
-			gto_advance_to_next_street(&state);
+            
+            if (state.street == STREET_PREFLOP && state.num_actions_this_street == 1) {
+                state.active_player = (uint8_t)(1 - state.active_player);
+                float next_c = (state.active_player == P1)
+                    ? state.p1_contribution : state.p2_contribution;
+                float other_c = (state.active_player == P1)
+                    ? state.p2_contribution : state.p1_contribution;
+                if (other_c > next_c + 0.001f) {
+                    state.to_call = other_c - next_c;
+                    state.facing_bet = true;
+                } else {
+                    state.to_call = 0.0f;
+                    state.facing_bet = false;
+                }
+            } else {
+    			gto_advance_to_next_street(&state);
+            }
 			return state;
 		}
 		if (action_id >= 2 && action_id <= 4) {
@@ -469,15 +535,36 @@ GameState gto_apply_action(GameState state, int action_id) {
 				*actor_contribution += call_commit;
 				state.pot += call_commit;
 				state.to_call = 0.0f;
-				gto_advance_to_next_street(&state);
+                
+                if (state.street == STREET_PREFLOP && state.num_actions_this_street == 1) {
+                    state.active_player = (uint8_t)(1 - state.active_player);
+                    float next_c = (state.active_player == P1)
+                        ? state.p1_contribution : state.p2_contribution;
+                    float other_c = (state.active_player == P1)
+                        ? state.p2_contribution : state.p1_contribution;
+                    if (other_c > next_c + 0.001f) {
+                        state.to_call = other_c - next_c;
+                        state.facing_bet = true;
+                    } else {
+                        state.to_call = 0.0f;
+                        state.facing_bet = false;
+                    }
+                } else {
+    				gto_advance_to_next_street(&state);
+                }
 				return state;
 			}
-			*actor_stack -= actor_commit;
-			if (*actor_stack < 0.0f) *actor_stack = 0.0f;
-			*actor_contribution += actor_commit;
-			state.pot += actor_commit;
-			state.to_call = actor_commit - previous_to_call;
-			state.num_raises_this_street++;
+		*actor_stack -= actor_commit;
+		if (*actor_stack < 0.0f) *actor_stack = 0.0f;
+		*actor_contribution += actor_commit;
+		state.pot += actor_commit;
+		{
+			float opp_c = (state.active_player == P1)
+				? state.p2_contribution : state.p1_contribution;
+			state.to_call = *actor_contribution - opp_c;
+			if (state.to_call < 0.0f) state.to_call = 0.0f;
+		}
+		state.num_raises_this_street++;
 			/* After a raise, action passes back to the other player. */
 			state.active_player = (uint8_t)(1 - state.active_player);
 			state.facing_bet = true;
@@ -487,7 +574,9 @@ GameState gto_apply_action(GameState state, int action_id) {
 	}
 	/* OOP or IP facing check: 0=Check, 1=Bet33, 2=Bet52, 3=Bet100 */
 	if (action_id == 0) {
-		if (state.num_actions_this_street >= 2) {
+        // Check
+		if (state.num_actions_this_street >= 2 || (state.street == STREET_PREFLOP && state.num_actions_this_street >= 1 && state.active_player == P2)) {
+            // BB Check (Preflop) or Check-Check (Postflop)
 			gto_advance_to_next_street(&state);
 		} else {
 			state.active_player = 1 - state.active_player;
@@ -504,7 +593,12 @@ GameState gto_apply_action(GameState state, int action_id) {
 		if (*actor_stack < 0.0f) *actor_stack = 0.0f;
 		*actor_contribution += actor_commit;
 		state.pot += actor_commit;
-		state.to_call = actor_commit;
+		{
+			float opp_c = (state.active_player == P1)
+				? state.p2_contribution : state.p1_contribution;
+			state.to_call = *actor_contribution - opp_c;
+			if (state.to_call < 0.0f) state.to_call = 0.0f;
+		}
 		state.num_raises_this_street++;
 		state.active_player = 1 - state.active_player;
 		state.facing_bet = true;
@@ -541,16 +635,8 @@ void gto_get_strategy(float* regret, float* out_strategy, uint8_t legal_actions)
 		if (legal_actions & (1 << i)) {
 			if (normalized_sum > 0)
 				out_strategy[i] = out_strategy[i] / normalized_sum;
-			else {
-				/* When no positive regrets: at OOP flop (Check + 3 bets) prefer check
-				 * so we show ~100%% check before convergence; otherwise uniform. */
-				if (legal_actions == 0x0Fu && i == 0)
-					out_strategy[i] = 1.0f;
-				else if (legal_actions == 0x0Fu)
-					out_strategy[i] = 0.0f;
-				else
-					out_strategy[i] = 1.0f / (float)num_legal_actions;
-			}
+			else
+				out_strategy[i] = 1.0f / (float)num_legal_actions;
 		}
 	}
 }
@@ -644,6 +730,18 @@ static float estimate_showdown_utility(const GameState *state, int traverser) {
 	remaining_count = build_remaining_cards(used_cards, remaining_cards);
 	if (remaining_count <= 0)
 		return 0.0f;
+    
+    // If Preflop -> Flop transition was treated as terminal, cards_needed would be 5 (if state.board is 0).
+    // Or if we advanced to Flop and board is 0, cards_needed=5.
+    // Iterating 2.6M combos is too slow.
+    // However, the caller (gto_mccfr) handles chance nodes for cards_needed > 0 usually.
+    // If we call this function, we expect to be able to calculate it.
+    // If we are solving Preflop-Only, we might reach this with cards_needed=5?
+    // No, if we transition Preflop -> Flop, we likely want to stop and return equity.
+    // If we are here with cards_needed >= 3, it's too slow.
+    // But my plan is to transition to Flop (cards=3).
+    // So cards_needed will be 2 (Turn+River).
+    // That is handled below (cards_needed == 2).
 
 	if (cards_needed == 1) {
 #ifdef _OPENMP
@@ -727,6 +825,26 @@ float gto_mccfr(GameState state, int traverser) {
 	/* Avoid use of uninitialized action_values */
 	for (a = 0; a < MAX_ACTIONS; a++)
 		action_values[a] = 0.0f;
+    
+    // PREFLOP-ONLY: when action reaches the flop, deal a full 5-card
+    // board randomly and evaluate a single showdown. This is Monte Carlo
+    // equity estimation -- much faster than exhaustive turn+river enumeration
+    // and correct in expectation for MCCFR convergence.
+    if (state.street >= STREET_FLOP) {
+        int n_board = __builtin_popcountll(state.board);
+        int total_needed = 5 - n_board;
+        if (total_needed > 0) {
+            GameState sd = state;
+            for (int i = 0; i < total_needed; i++) {
+                uint64_t card = deal_board_card(sd);
+                if (!card) return 0.0f;
+                sd.board |= card;
+            }
+            state = sd;
+        }
+        state.is_terminal = true;
+        return gto_get_payout(&state, traverser);
+    }
 	
 	// Terminal node - return payout
 	if (is_terminal_state(&state))
