@@ -8,7 +8,7 @@
 #define MAX_ACTIONS    8   // OOP: Check + 3 bet sizes; IP facing bet: Fold, Call, 3 raise sizes
 #define BITS_PER_ACTION 3  // history stores action_id 0..7 per action
 #define MAX_HISTORY    100
-#define TABLE_SIZE     16000003  /* ~1.3GB shared lock-free table; reduce if OOM */
+#define TABLE_SIZE     8000003   /* ~700MB/table; reduce if OOM. Increase for faster merge (more RAM). */
 #define EMPTY_MAGIC    0xBEEFBEEF
 #define MAX_PROBE_LEN  256   /* cap linear probing; prevents O(n) degenerate performance at high load */
 #define STARTING_FLOP_POT_BB 6.0f

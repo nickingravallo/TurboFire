@@ -61,7 +61,6 @@ void gto_clear_thread_table(void) {
 void gto_init_table(HashTable *table) {
 	int i;
 	if (!table) return;
-	memset(table, 0, (size_t)TABLE_SIZE * sizeof(HashTable));
 	for (i = 0; i < TABLE_SIZE; i++)
 		table[i].key = EMPTY_MAGIC;
 }
@@ -121,38 +120,32 @@ uint64_t make_info_set_key(
 	return key;
 }
 
-/* Lock-free get-or-create using atomic CAS on the key field.
- * Safe for concurrent use by multiple threads on a shared table.
- * The table must be zero-initialized (gto_init_table) before first use. */
+// Get or create information set node (uses thread table if set, else global)
 InfoSet* gto_get_or_create_node(uint64_t key) {
 	HashTable *tbl = gto_current_table();
 	uint64_t hash_idx;
+	int i;
 	unsigned int probes = 0;
-
-	hash_idx = hash_key(key);
-	while (probes < MAX_PROBE_LEN) {
-		uint64_t existing = __atomic_load_n(&tbl[hash_idx].key, __ATOMIC_RELAXED);
-
-		if (existing == key)
+	
+	hash_idx = hash_key(key) % TABLE_SIZE;
+	while (tbl[hash_idx].key != EMPTY_MAGIC) {
+		if (tbl[hash_idx].key == key)
 			return &tbl[hash_idx].infoSet;
-
-		if (existing == EMPTY_MAGIC) {
-			uint64_t expected = EMPTY_MAGIC;
-			if (__atomic_compare_exchange_n(&tbl[hash_idx].key, &expected, key,
-			                                0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-				tbl[hash_idx].infoSet.key = key;
-				return &tbl[hash_idx].infoSet;
-			}
-			if (__atomic_load_n(&tbl[hash_idx].key, __ATOMIC_RELAXED) == key)
-				return &tbl[hash_idx].infoSet;
-		}
-
 		hash_idx = (hash_idx + 1) % TABLE_SIZE;
-		probes++;
+		if (++probes >= MAX_PROBE_LEN) {
+			gto_insert_fail_count++;
+			return NULL;
+		}
 	}
-
-	gto_insert_fail_count++;
-	return NULL;
+	
+	/* Empty slot found */
+	tbl[hash_idx].key = key;
+	for (i = 0; i < MAX_ACTIONS; i++) {
+		tbl[hash_idx].infoSet.regret_sum[i] = 0;
+		tbl[hash_idx].infoSet.strategy_sum[i] = 0;
+	}
+	tbl[hash_idx].infoSet.key = key;
+	return &tbl[hash_idx].infoSet;
 }
 
 InfoSet* gto_get_node(uint64_t key) {
@@ -541,16 +534,8 @@ void gto_get_strategy(float* regret, float* out_strategy, uint8_t legal_actions)
 		if (legal_actions & (1 << i)) {
 			if (normalized_sum > 0)
 				out_strategy[i] = out_strategy[i] / normalized_sum;
-			else {
-				/* When no positive regrets: at OOP flop (Check + 3 bets) prefer check
-				 * so we show ~100%% check before convergence; otherwise uniform. */
-				if (legal_actions == 0x0Fu && i == 0)
-					out_strategy[i] = 1.0f;
-				else if (legal_actions == 0x0Fu)
-					out_strategy[i] = 0.0f;
-				else
-					out_strategy[i] = 1.0f / (float)num_legal_actions;
-			}
+			else
+				out_strategy[i] = 1.0f / (float)num_legal_actions;
 		}
 	}
 }

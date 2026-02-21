@@ -55,10 +55,6 @@ void flop_solver_set_ranges(FlopSolver *fs,
 /* Run MCCFR for n_iterations. Samples hands from ranges (no board overlap). */
 void flop_solver_solve(FlopSolver *fs, int n_iterations);
 
-/* Two-phase solve: Phase 1 = flop with random turn/river (no clairvoyance); Phase 2 = turn subgame
- * with preset_turn and random river. display_river is restored for UI (e.g. user's 5th card). */
-void flop_solver_solve_two_phase(FlopSolver *fs, int phase1_iters, int phase2_iters, uint64_t display_river);
-
 /* Chunked run with merge once at end: call begin, then solve(fs,n) in a loop, then end.
  * Avoids repeated merge into the (full) global table; one merge at end is much faster. */
 void flop_solver_begin_parallel_solve(FlopSolver *fs);
