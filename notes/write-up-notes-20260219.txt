@@ -13,4 +13,5 @@
 - Learned more about optimization in the meantime
 - Code, as of now, is 100% AI written past the OMPEval and tests
 - Using new agents to solve problems in parallel
-
+- Building micro-utilities such as Rangefinder was a huge help, where the AI did not understand what good 'ranges' were.
+- Human expertise is more improtant now than ever.
