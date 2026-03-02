@@ -109,6 +109,15 @@ InfoSet* get_or_create_node(uint64_t key) {
 	return &table[id].infoSet;
 }
 
+static int seen_commit(const uint64_t seen[], int n, uint64_t cents) {
+	for (int i = 0; i < n; i++)
+		if (seen[i] == cents) return 1;
+	return 0;
+}
+
+/*
+ * Work in cents for the solver
+ */
 void init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint64_t board, uint64_t present_turn, uint64_t preset_river) {
 	uint8_t legal;
 	float actor_stack;
@@ -128,6 +137,19 @@ void init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint6
 				actor_stack;
 			seen_cards[num_seen_cards] = quantize_cents(c);
 		}
+		if (state->num_raises_this_street < MAX_RAISES_PER_STREET) {
+			for (int i = 2; i <= 4; i++) {
+				float raise = state->pot * (float)RAISE_PCT[i - 2] / 100.0f;
+				float total = state->to_call + raise;
+				if (total > actor_stack)
+					total = actor_stack;
+				if (total <= state->to_call)
+					continue;
+				uint64_t cents = quantize_cents(total);
+				if (seen_commit(seen_cards, 
+			}
+		}
+
 	}
 
 }

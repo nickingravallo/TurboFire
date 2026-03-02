@@ -192,9 +192,7 @@ static uint8_t get_legal_actions(const GameState *state) {
 	if (state->facing_bet) {
 		legal |= (1u << 0); /* Fold */
 		if (actor_stack > 0.0f) legal |= (1u << 1); /* Call */
-		{
-			float c = (state->to_call < actor_stack) ? state->to_call : actor_stack;
-			seen[n_seen++] = quantize_cents(c);
+		{ float c = (state->to_call < actor_stack) ? state->to_call : actor_stack; seen[n_seen++] = quantize_cents(c);
 		}
 		if (state->num_raises_this_street < MAX_RAISES_PER_STREET) {
 			for (int i = 2; i <= 4; i++) {
