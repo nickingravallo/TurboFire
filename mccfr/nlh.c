@@ -20,8 +20,8 @@
 
 /* OOP / IP facing check: 0=Check, 1=Bet33, 2=Bet52, 3=Bet100 */
 /* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise52, 4=Raise100 */
-static const int BET_PCT[]   = { 0, 33, 52, 100 };
-static const int RAISE_PCT[] = { 0, 33, 52, 100 };
+static const int BET_PCT[]   = { 33, 52, 100 };
+static const int RAISE_PCT[] = { 33, 52, 100 };
 #define MAX_RAISES_PER_STREET  2
 
 #define P1  0
@@ -241,7 +241,7 @@ GameState apply_action(GameState state, int action_id) {
 		}
 
 		//raise logic
-		uint32_t raise_val = (uint32_t)(state.pot * (RAISE_PCT[action_id - 2] / 100.f));
+		uint32_t raise_val = (uint32_t)(state.pot * (RAISE_PCT[action_id - 1] / 100.f));
 		uint32_t total_commit = to_call + raise_val;
 		if (total_commit > *actor_stack)
 			total_commit = *actor_stack;
@@ -280,6 +280,27 @@ extern uint64_t get_infoset_key(GameState *state);
 extern int get_legal_actions(GameState *state, int *legal_actions_out);
 extern bool is_terminal(GameState *state);
 extern float evaluate_payoff(GameState *state, int traverser);
+
+int get_legal_actions(GameState* state, int *legal_actions_out) {
+	int count = 0;
+
+	int32_t stack_diff = (state->active_player == 0) ?
+			(int32_t)state->p1_stack - (int32_t)state->p2_stack :
+			(int32_t)state->p2_stack - (int32_t)state->p1_stack;
+
+	uint32_t to_call = (stack_diff > 0) ? (uint32_t)stack_diff : 0;
+
+	uint32_t actor_stack = (state->active_player == 0) ? state->p1_stack : state->p2_stack;
+
+	if (to_call > 0) {
+		legal_actions_out[count++] = 0; //fold always legal
+		legal_actions_out[count++] = 1; //call is always legal
+		
+		//only allow raises if we have more than required to call
+		//also need to not hit raise cap
+		if (actor_stack > to_call 
+	}
+}
 
 /*
  * cfr+ alg
