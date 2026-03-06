@@ -68,31 +68,21 @@ typedef struct {
 
 /*
  * Hashing and such
+ *
+ * Note: RNG is shared with the main GTO solver library (see gto_solver.c),
+ * so we just declare the interfaces here and rely on that implementation
+ * to avoid duplicate symbol errors at link time.
  */
-static uint64_t gto_rng_state;
-HashTable* table = NULL;
+extern void gto_rng_seed(unsigned int seed);
+extern float gto_rng_uniform(void);
 
-void gto_rng_seed(unsigned int seed) {
-	gto_rng_state = (uint64_t)seed;
-	if (gto_rng_state == 0)
-		gto_rng_state = 1;
-}
+HashTable* table = NULL;
 
 static uint64_t hash_id(uint64_t key) {
 	key ^= key >> 33;
 	key *= 0xff51afd7ed558ccdLLU;
 	key ^= key >> 33;
 	return key % TABLE_SIZE;
-}
-
-float gto_rng_uniform(void) {
-	uint64_t x = gto_rng_state;
-	x ^= x << 13;
-	x ^= x >> 7;
-
-	x ^= x << 17;
-	gto_rng_state = x;
-	return (float)(x >> 11) / (float)(UINT64_C(1) << 53);
 }
 
 void init_table() {
@@ -212,15 +202,15 @@ InfoSet* get_or_create_node(uint64_t key) {
 }
 
 bool is_terminal(GameState *state) {
-	//showdown
-	if (state->street > STREET_RIVER)
-		return true;
+    // Showdown
+    if (state->street > STREET_RIVER)
+        return true;
 
-	//fold
-	if (state->last_action == 0 && state->p1_stack != state->p2_stack)
-		return true;
+    // Fold: Only valid if an action has actually occurred
+    if (state->num_actions_total > 0 && state->last_action == 0 && state->p1_stack != state->p2_stack)
+        return true;
 
-	return false;
+    return false;
 }
 
 float evaluate_payoff(GameState *state, int traverser) {
@@ -323,7 +313,7 @@ GameState apply_action(GameState state, int action_id) {
 		}
 
 		//raise logic
-		uint32_t raise_val = (uint32_t)(state.pot * (RAISE_PCT[action_id - 1] / 100.f));
+		uint32_t raise_val = (uint32_t)(state.pot * (RAISE_PCT[action_id - 2] / 100.f));
 		uint32_t total_commit = to_call + raise_val;
 		if (total_commit > *actor_stack)
 			total_commit = *actor_stack;
@@ -346,7 +336,7 @@ GameState apply_action(GameState state, int action_id) {
 	}
 
 	//bet logic
-	uint32_t bet_amt = (uint32_t)(state.pot * (BET_PCT[action_id] / 100.f));
+	uint32_t bet_amt = (uint32_t)(state.pot * (BET_PCT[action_id - 1] / 100.f));
 	if (bet_amt > *actor_stack)
 		bet_amt = *actor_stack;
 
@@ -483,6 +473,63 @@ static uint64_t draw_random_card(uint64_t dead_cards) {
     }
 }
 
+void print_node_strategy(GameState state) {
+    uint64_t key = get_infoset_key(&state);
+    uint64_t id = hash_id(key);
+    unsigned int probes = 0;
+    InfoSet *node = NULL;
+
+    // Search the hash table
+    while (table[id].key != EMPTY_MAGIC) {
+        if (table[id].key == key) {
+            node = &table[id].infoSet;
+            break;
+        }
+        id = (id + 1) % TABLE_SIZE;
+        if (++probes >= TABLE_SIZE) break;
+    }
+
+    if (!node) {
+        printf("State not found in memory. It was never explored.\n");
+        return;
+    }
+
+    int legal_actions[MAX_ACTIONS];
+    int num_legal_actions = get_legal_actions(&state, legal_actions);
+
+    // Calculate the total sum of all strategy weights
+    float sum = 0.0f;
+    for (int i = 0; i < num_legal_actions; i++) {
+        sum += node->strategy_sum[legal_actions[i]];
+    }
+
+    int32_t stack_diff = (state.active_player == P1) ? 
+        (int32_t)state.p1_stack - (int32_t)state.p2_stack : 
+        (int32_t)state.p2_stack - (int32_t)state.p1_stack;
+    uint32_t to_call = (stack_diff > 0) ? stack_diff : 0;
+
+    printf("\n--- Strategy for Player %d ---\n", state.active_player + 1);
+    for (int i = 0; i < num_legal_actions; i++) {
+        int a = legal_actions[i];
+        
+        // Normalize the probability (or default to uniform if sum is 0)
+        float prob = (sum > 0.0f) ? (node->strategy_sum[a] / sum) : (1.0f / (float)num_legal_actions);
+        
+        // Format the output based on the action type
+        if (to_call > 0) {
+            if (a == 0) printf("  Fold: ");
+            else if (a == 1) printf("  Call: ");
+            else printf("  Raise %d%%: ", RAISE_PCT[a - 2]); 
+        } else {
+            if (a == 0) printf("  Check: ");
+            else printf("  Bet %d%%: ", BET_PCT[a - 1]);
+        }
+        
+        printf("%.2f%%\n", prob * 100.0f);
+    }
+    printf("----------------------------\n");
+}
+
 int main() {
     // 1. Initialize Everything
     printf("Initializing tables...\n");
@@ -521,5 +568,23 @@ int main() {
     }
 
     printf("Solving complete!\n");
+
+    // 1. Create a clean root state matching your starting parameters
+    GameState query_state = {0};
+    query_state.p1_stack = INITIAL_STACK - SB_CENTS;
+    query_state.p2_stack = INITIAL_STACK - BB_CENTS;
+    query_state.pot = SB_CENTS + BB_CENTS;
+    query_state.active_player = P1;
+    query_state.street = 0;
+
+    // 2. Hardcode Pocket Aces (Ace of Spades, Ace of Hearts)
+    // Spades = bit 12 (offset 0), Hearts = bit 12 (offset 16)
+    uint64_t ace_spades = 1ULL << 12;
+    uint64_t ace_hearts = 1ULL << (12 + 16);
+    query_state.p1_hand = ace_spades | ace_hearts;
+
+    // 3. Print the strategy!
+    print_node_strategy(query_state);
+
     return 0;
 }
