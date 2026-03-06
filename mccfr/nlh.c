@@ -107,25 +107,6 @@ void init_table() {
 		table[i].key = EMPTY_MAGIC;
 }
 
-static inline uint64_t make_info_set_key(uint64_t history, uint64_t board, uint64_t private_hand) {
-    // 1. Get the combined 128-bit canonical representation
-    unsigned __int128 canonical_state = get_canonical_hand(private_hand, board);
-
-    // 2. Fold it down to 64 bits safely
-    uint64_t folded_cards = (uint64_t)(canonical_state ^ (canonical_state >> 64));
-
-    // 3. FNV-1a Mix: Just the folded cards and the history
-    uint64_t key = 0xcbf29ce484222325ULL;
-    
-    key ^= folded_cards;
-    key *= 0x100000001B3ULL; 
-    
-    key ^= history;
-    key *= 0x100000001B3ULL;
-    
-    return key;
-}
-
 /* * Assumes the 52-card deck is laid out as 4 contiguous 13-bit blocks.
  * Spades: 0-12, Hearts: 13-25, Diamonds: 26-38, Clubs: 39-51.
  */
@@ -181,6 +162,30 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
     return canonical;
 }
 
+static inline uint64_t make_info_set_key(uint64_t history, uint64_t board, uint64_t private_hand) {
+    // 1. Get the combined 128-bit canonical representation
+    unsigned __int128 canonical_state = get_canonical_hand(private_hand, board);
+
+    // 2. Fold it down to 64 bits safely
+    uint64_t folded_cards = (uint64_t)(canonical_state ^ (canonical_state >> 64));
+
+    // 3. FNV-1a Mix: Just the folded cards and the history
+    uint64_t key = 0xcbf29ce484222325ULL;
+    
+    key ^= folded_cards;
+    key *= 0x100000001B3ULL; 
+    
+    key ^= history;
+    key *= 0x100000001B3ULL;
+    
+    return key;
+}
+
+uint64_t get_infoset_key(GameState *state) {
+	uint64_t active_hand = (state->active_player == P1) ? state->p1_hand : state->p2_hand;
+	return make_info_set_key(state->history, state->board, active_hand);
+}
+
 InfoSet* get_or_create_node(uint64_t key) {
 	uint64_t id;
 	unsigned int probes = 0;
@@ -204,6 +209,85 @@ InfoSet* get_or_create_node(uint64_t key) {
 
 	table[id].infoSet.key = key;
 	return &table[id].infoSet;
+}
+
+bool is_terminal(GameState *state) {
+	//showdown
+	if (state->street > STREET_RIVER)
+		return true;
+
+	//fold
+	if (state->last_action == 0 && state->p1_stack != state->p2_stack)
+		return true;
+
+	return false;
+}
+
+float evaluate_payoff(GameState *state, int traverser) {
+	uint32_t my_stack = (traverser == P1) ?
+		state->p1_stack :
+		state->p2_stack;
+
+	if (state->last_action == 0 && state->p1_stack != state->p2_stack) {
+		int winner = 1 - state->active_player;
+
+		if (traverser == winner)
+			return (float)((my_stack + state->pot) - INITIAL_STACK);
+		else
+			return (float)(my_stack - INITIAL_STACK);
+	}
+
+	//showdown
+	int p1_score = evaluate(state->p1_hand, state->board);
+	int p2_score = evaluate(state->p2_hand, state->board);
+
+	int my_score  = (traverser == P1) ? p1_score : p2_score;
+	int opp_score = (traverser == P1) ? p2_score : p1_score;
+
+	if (my_score > opp_score)
+		return (float)((my_stack + state->pot) - INITIAL_STACK); //Win
+	else if (my_score < opp_score) 
+		return (float)(my_stack - INITIAL_STACK); // Lose
+	else {
+		uint32_t half_pot = state->pot / 2;
+        	return (float)((my_stack + half_pot) - INITIAL_STACK); // Chop
+	}
+}
+
+uint64_t get_dead_cards(GameState *state) {
+	return state->board | state->p1_hand | state->p2_hand;
+}
+
+GameState advance_street(GameState state) {
+	state.street++;
+	state.actions_st = 0;
+	state.raises_st = 0;
+
+	state.active_player = P1;
+
+	if (state.street > STREET_RIVER)
+		return state;
+
+	while (true) {
+		uint64_t dead_cards = get_dead_cards(&state);
+
+		int card_idx = (int)(gto_rng_uniform() * 52.0f);
+		if (card_idx == 52)
+			card_idx = 51;
+
+		int rank = card_idx % 13;
+		int suit = card_idx / 13;
+
+		uint64_t card_mask = 1ULL << (rank + (suit * 16));
+
+		if ((dead_cards & card_mask) == 0) {
+			state.board |= card_mask;
+			break;
+		}
+		//draw again
+	}
+
+	return state;
 }
 
 
@@ -246,7 +330,7 @@ GameState apply_action(GameState state, int action_id) {
 
 		*actor_stack -= total_commit;
 		state.pot += total_commit;
-		state_raises_st++;
+		state.raises_st++;
 
 		state.active_player = 1-state.active_player;
 		return state;
@@ -270,44 +354,6 @@ GameState apply_action(GameState state, int action_id) {
 	state.pot += bet_amt;
 	state.raises_st++;
 	state.active_player = 1 - state.active_player;
-
-	return state;
-}
-
-extern uint64_t get_infoset_key(GameState *state);
-extern bool is_terminal(GameState *state);
-extern float evaluate_payoff(GameState *state, int traverser);
-
-uint64_t get_dead_cards(GameState *state) {
-	return state->board | state->pw_card | state->p2_card;
-}
-
-GameState advance_street(GameState state) {
-	state.street++;
-	state.actions_st = 0;
-	state.raises_st = 0;
-
-	state.active_player = P1;
-
-	if (state.street > STREET_RIVER)
-		return state;
-
-	while (true) {
-		int card_idx = (int)(gto_rng_uniform() * 52.0f);
-		if (card_idx == 52)
-			card_idx = 51;
-
-		int rank = card_idx % 13;
-		int suit = card_idx / 13;
-
-		uint64_t card_mask = 1ULL << (rank + (suit * 16));
-
-		if ((dead_cards & card_mask) == 0) {
-			state.board |= card_mask;
-			break;
-		}
-		//draw again
-	}
 
 	return state;
 }
@@ -421,4 +467,59 @@ static float cfrp(GameState state, int traverser, int iter) {
 	}
 
 	return node_util;
+}
+
+// Helper to draw a single card
+static uint64_t draw_random_card(uint64_t dead_cards) {
+    while (true) {
+        int card_idx = (int)(gto_rng_uniform() * 52.0f);
+        if (card_idx == 52) card_idx = 51;
+        
+        int rank = card_idx % 13;
+        int suit = card_idx / 13;
+        uint64_t mask = 1ULL << (rank + (suit * 16));
+        
+        if ((dead_cards & mask) == 0) return mask;
+    }
+}
+
+int main() {
+    // 1. Initialize Everything
+    printf("Initializing tables...\n");
+    init_rank_map();   // From your ranks file
+    init_flush_map();  // From your ranks file
+    init_table();      // Hash table
+    gto_rng_seed((unsigned int)time(NULL));
+
+    int num_iterations = 100000;
+
+    printf("Starting CFR+ traversal...\n");
+    for (int iter = 1; iter <= num_iterations; iter++) {
+        
+        // 2. Create a clean game state
+        GameState root = {0};
+        root.p1_stack = INITIAL_STACK - SB_CENTS;
+        root.p2_stack = INITIAL_STACK - BB_CENTS;
+        root.pot = SB_CENTS + BB_CENTS;
+        root.active_player = P1; // P1 is SB preflop
+        root.street = 0; // Preflop
+        
+        // 3. Deal Hole Cards
+        root.p1_hand |= draw_random_card(root.board | root.p1_hand | root.p2_hand);
+        root.p1_hand |= draw_random_card(root.board | root.p1_hand | root.p2_hand);
+        
+        root.p2_hand |= draw_random_card(root.board | root.p1_hand | root.p2_hand);
+        root.p2_hand |= draw_random_card(root.board | root.p1_hand | root.p2_hand);
+
+        // 4. CFR+ Alternating Updates
+        cfrp(root, P1, iter);
+        cfrp(root, P2, iter);
+
+        if (iter % 10000 == 0) {
+            printf("Completed iteration %d\n", iter);
+        }
+    }
+
+    printf("Solving complete!\n");
+    return 0;
 }
