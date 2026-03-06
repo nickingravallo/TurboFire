@@ -14,13 +14,14 @@
 #define TABLE_SIZE         2000003
 #define EMPTY_MAGIC        0xBEEFBEEF
 
-#define STARTING_FLOP_POT_BB  6.0f
-#define STARTING_STACK_BB      97.0f
+#define SB_CENTS 50
+#define BB_CENTS 100
+#define INITIAL_STACK 10000 // 100 Big Blinds in cents
 
 /* OOP / IP facing check: 0=Check, 1=Bet33, 2=Bet52, 3=Bet100 */
 /* IP facing bet: 0=Fold, 1=Call, 2=Raise33, 3=Raise52, 4=Raise100 */
 static const int BET_PCT[]   = { 0, 33, 52, 100 };
-static const int RAISE_PCT[] = { 33, 52, 100 };
+static const int RAISE_PCT[] = { 0, 33, 52, 100 };
 #define MAX_RAISES_PER_STREET  2
 
 #define P1  0
@@ -28,6 +29,30 @@ static const int RAISE_PCT[] = { 33, 52, 100 };
 #define STREET_FLOP  1
 #define STREET_TURN  2
 #define STREET_RIVER 3
+
+typedef struct {
+    // --- 8-Byte Blocks (40 bytes) ---
+    uint64_t history;       // Bit-packed actions
+    uint64_t p1_hand;       // Bit-mask of cards
+    uint64_t p2_hand; 
+    uint64_t board;         // Up to 5 cards packed
+    uint64_t deck_params;   // Turn/River constants
+
+    // --- 4-Byte Blocks (16 bytes) ---
+    uint32_t pot;           // Total in cents
+    uint32_t p1_stack;      // Current chips remaining
+    uint32_t p2_stack;
+    uint32_t initial_pot;   // Useful for relative bet sizing
+
+    // --- 1-Byte Blocks (8 bytes) ---
+    uint8_t street;         // 0=Pre, 1=Flop, 2=Turn, 3=River
+    uint8_t active_player;  // 0 or 1
+    uint8_t actions_st;     // Actions this street
+    uint8_t raises_st;      // Raises this street
+    uint8_t last_action;    // The action ID that got us here
+    uint8_t num_actions_total;
+
+} GameState; // Total: 64 Bytes
 
 typedef struct {
 	float regret_sum[MAX_ACTIONS];
@@ -38,8 +63,12 @@ typedef struct {
 typedef struct {
 	uint64_t key;
 	InfoSet infoSet;
+	uint64_t count;
 } HashTable;
 
+/*
+ * Hashing and such
+ */
 static uint64_t gto_rng_state;
 HashTable* table = NULL;
 
@@ -78,10 +107,80 @@ void init_table() {
 		table[i].key = EMPTY_MAGIC;
 }
 
-static uint64_t quantize_cents(float value) {
-	if (value <= 0.0f)
-		return 0;
-	return (uint64_t) (value * 100.0f + 0.5f)
+static inline uint64_t make_info_set_key(uint64_t history, uint64_t board, uint64_t private_hand) {
+    // 1. Get the combined 128-bit canonical representation
+    unsigned __int128 canonical_state = get_canonical_hand(private_hand, board);
+
+    // 2. Fold it down to 64 bits safely
+    uint64_t folded_cards = (uint64_t)(canonical_state ^ (canonical_state >> 64));
+
+    // 3. FNV-1a Mix: Just the folded cards and the history
+    uint64_t key = 0xcbf29ce484222325ULL;
+    
+    key ^= folded_cards;
+    key *= 0x100000001B3ULL; 
+    
+    key ^= history;
+    key *= 0x100000001B3ULL;
+    
+    return key;
+}
+
+#include <stdint.h>
+
+/* * Assumes the 52-card deck is laid out as 4 contiguous 13-bit blocks.
+ * Spades: 0-12, Hearts: 13-25, Diamonds: 26-38, Clubs: 39-51.
+ */
+static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t board) {
+    // 1. Pack the board and hand together into a 128-bit integer.
+    // Each suit will take up 26 bits (13 for board, 13 for hand).
+    unsigned __int128 packed_suits = 0;
+    
+    // Spades
+    packed_suits |= (unsigned __int128)((board >> 0) & 0x1FFF) << 0;
+    packed_suits |= (unsigned __int128)((private_hand >> 0) & 0x1FFF) << 13;
+    
+    // Hearts
+    packed_suits |= (unsigned __int128)((board >> 13) & 0x1FFF) << 26;
+    packed_suits |= (unsigned __int128)((private_hand >> 13) & 0x1FFF) << 39;
+    
+    // Diamonds
+    packed_suits |= (unsigned __int128)((board >> 26) & 0x1FFF) << 52;
+    packed_suits |= (unsigned __int128)((private_hand >> 26) & 0x1FFF) << 65;
+    
+    // Clubs
+    packed_suits |= (unsigned __int128)((board >> 39) & 0x1FFF) << 78;
+    packed_suits |= (unsigned __int128)((private_hand >> 39) & 0x1FFF) << 91;
+
+    // 2. Extract the 26-bit chunks for sorting
+    uint32_t s[4];
+    s[0] = (packed_suits >> 0)  & 0x3FFFFFF;
+    s[1] = (packed_suits >> 26) & 0x3FFFFFF;
+    s[2] = (packed_suits >> 52) & 0x3FFFFFF;
+    s[3] = (packed_suits >> 78) & 0x3FFFFFF;
+
+    // 3. Fast, branchless sorting network for 4 elements (descending)
+    #define SWAP(a, b) do { \
+        uint32_t t = s[a] ^ s[b]; \
+        uint32_t mask = (s[a] < s[b]) ? ~0U : 0U; \
+        s[a] ^= t & mask; \
+        s[b] ^= t & mask; \
+    } while(0)
+
+    SWAP(0, 1); SWAP(2, 3); 
+    SWAP(0, 2); SWAP(1, 3); 
+    SWAP(1, 2);
+    #undef SWAP
+
+    // 4. Repack the sorted suits. The actual suits are stripped away; 
+    // only the structural layout of the ranks remains.
+    unsigned __int128 canonical = 0;
+    canonical |= ((unsigned __int128)s[0]) << 0;
+    canonical |= ((unsigned __int128)s[1]) << 26;
+    canonical |= ((unsigned __int128)s[2]) << 52;
+    canonical |= ((unsigned __int128)s[3]) << 78;
+
+    return canonical;
 }
 
 InfoSet* get_or_create_node(uint64_t key) {
@@ -109,47 +208,148 @@ InfoSet* get_or_create_node(uint64_t key) {
 	return &table[id].infoSet;
 }
 
-static int seen_commit(const uint64_t seen[], int n, uint64_t cents) {
-	for (int i = 0; i < n; i++)
-		if (seen[i] == cents) return 1;
-	return 0;
-}
 
 /*
- * Work in cents for the solver
+ * actual solver logic, work on applying actions
  */
-void init_flop_state(GameState* state, uint64_t p1_hand, uint64_t p2_hand, uint64_t board, uint64_t present_turn, uint64_t preset_river) {
-	uint8_t legal;
-	float actor_stack;
-	uint64_t seen_cards[6];
-	int num_seen_cards;
+GameState apply_action(GameState state, int action_id) {
+	state.history |= ((uint64_t)(action_id & 0b111) << (state.num_actions_total * 3));
 
-	if (state->street < STREET_FLOP || state->street > STREET_RIVER)
-		return 0;
+	state.num_actions_total++;
+	state.actions_st++;
+	state.last_action = (uint8_t)action_id;
 
-	if (state->facing_bet) {
-		legal |= (1u << 0); //fold
-		if (actor_stack > 0.0f)
-			legal != (1u << 1);
-		{
-			float cents = (state->to_call < actor_stack) ?
-				state->to_call :
-				actor_stack;
-			seen_cards[num_seen_cards] = quantize_cents(c);
-		}
-		if (state->num_raises_this_street < MAX_RAISES_PER_STREET) {
-			for (int i = 2; i <= 4; i++) {
-				float raise = state->pot * (float)RAISE_PCT[i - 2] / 100.0f;
-				float total = state->to_call + raise;
-				if (total > actor_stack)
-					total = actor_stack;
-				if (total <= state->to_call)
-					continue;
-				uint64_t cents = quantize_cents(total);
-				if (seen_commit(seen_cards, 
-			}
+	uint32_t p1_invested = INITIAL_STACK - state.p1_stack;
+	uint32_t p2_invested = INITIAL_STACK - state.p2_stack;
+
+	uint32_t to_call = (state.active_player == 0) ?
+		(p2_invested > p1_invested ? p2_invested - p1_invested : 0) :
+		(p1_invested > p2_invested ? p1_invested - p2_invested : 0);
+
+	uint32_t *actor_stack = (state.active_player == 0) ? &state.p1_stack : &state.p2_stack;
+
+	//facing a bet, (fold / check / raise)
+	if (to_call > 0) {
+		if (action_id == 0)
+			return state; //fold
+
+		if (action_id == 1) {
+			uint32_t commit = (*actor_stack < to_call) ? *actor_stack : to_call;
+			*actor_stack -= commit;
+			state.pot += commit;
+			return advance_street(state);
 		}
 
+		//raise logic
+		uint32_t raise_val = (uint32_t)(state.pot * (RAISE_PCT[action_id - 2] / 100.f));
+		uint32_t total_commit = to_call + raise_val;
+		if (total_commit > *actor_stack)
+			total_commit = *actor_stack;
+
+		*actor_stack -= total_commit;
+		state.pot += total_commit;
+		state_raises_st++;
+
+		state.active_player = 1-state.active_player;
+		return state;
 	}
 
+	//Not facing a bet, CHECK OR BET
+	if (action_id == 0) {
+		if (state.actions_st >= 2)
+			return advance_street(state);
+
+		state.active_player = 1 - state.active_player;
+		return state;
+	}
+
+	//bet logic
+	uint32_t bet_amt = (uint32_t)(state.pot * (BET_PCT[action_id] / 100.f));
+	if (bet_amt > *actor_stack)
+		bet_amt = *actor_stack;
+
+	*actor_stack -= bet_amt;
+	state.pot += bet_amt;
+	state.raises_st++;
+	state.active_player = 1 - state.active_player;
+
+	return state;
+}
+
+extern uint64_t get_infoset_key(GameState *state);
+extern int get_legal_actions(GameState *state, int *legal_actions_out);
+extern bool is_terminal(GameState *state);
+extern float evaluate_payoff(GameState *state, int traverser);
+
+/*
+ * cfr+ alg
+ */
+static float cfrp(GameState state, int traverser, int iter) {
+	if (is_terminal(&state))
+		return evaluate_payoff(&state, traverser);
+
+	uint64_t key = get_infoset_key(&state);
+	InfoSet *node = get_or_create_node(key);
+
+	int legal_actions[MAX_ACTIONS];
+	int num_legal_actions = get_legal_actions(&state, legal_actions);
+
+	float strategy[MAX_ACTIONS] = {0};
+	float sum_positive_regrets = 0.0f;
+
+	/*
+	 * Section is for external sampling, get the strategy values
+	 */
+	for (int i = 0; i < num_legal_actions; i++) {
+		int action = legal_actions[i];
+		float positive_regret = node->regret_sum[action] > 0.0f ?
+			node->regret_sum[action] :
+			0.0f;
+		strategy[action] = positive_regret;
+		sum_positive_regrets += positive_regret;
+	}
+
+	for (int i = 0; i < num_legal_actions; i++) {
+		int action = legal_actions[i];
+		if (sum_positive_regrets > 0.0f)
+			strategy[action] /= sum_positive_regrets;
+		else
+			strategy[action] = 1.0f / num_legal_actions;
+	}
+
+	//traverse the tree and compute action utils
+	float action_utils[MAX_ACTIONS] = {0};
+	float node_util = 0.0f;
+
+	for (int i = 0; i < num_legal_actions; i++) {
+		int action = legal_actions[i];
+		GameState next_state = apply_action(state, action);
+
+		//recursive
+		action_utils[action] = mccfr(next_state, traverser);
+		//calc ev for node
+		node_util += strategy[action] * action_utils[action];
+	}
+
+	//update regrets and avg strat for cfr+
+	if (state.active_player == traverser) {
+		//we are traverser, upgrade our own regrets
+		for (int i = 0; i < num_legal_actions; i++) {
+			int action = legal_actions[i];
+			float regret = action_utils[action] - node_util;
+
+			node->regret_sum[action] += regret;
+			if (node->regret_sum[action] < 0.0f)
+				node->regret_sum[action] = 0.0f;
+		}
+	}
+	else {
+		//we are opponent: update avg strat
+		for (int i = 0; i < num_legal_actions; i++) {
+			int action = legal_actions[i];
+			node->strategy_sum[a] += strategy[action] * (float)iter;
+		}
+	}
+
+	return node_util;
 }
