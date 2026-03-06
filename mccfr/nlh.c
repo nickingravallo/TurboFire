@@ -126,8 +126,6 @@ static inline uint64_t make_info_set_key(uint64_t history, uint64_t board, uint6
     return key;
 }
 
-#include <stdint.h>
-
 /* * Assumes the 52-card deck is laid out as 4 contiguous 13-bit blocks.
  * Spades: 0-12, Hearts: 13-25, Diamonds: 26-38, Clubs: 39-51.
  */
@@ -277,9 +275,42 @@ GameState apply_action(GameState state, int action_id) {
 }
 
 extern uint64_t get_infoset_key(GameState *state);
-extern int get_legal_actions(GameState *state, int *legal_actions_out);
 extern bool is_terminal(GameState *state);
 extern float evaluate_payoff(GameState *state, int traverser);
+
+uint64_t get_dead_cards(GameState *state) {
+	return state->board | state->pw_card | state->p2_card;
+}
+
+GameState advance_street(GameState state) {
+	state.street++;
+	state.actions_st = 0;
+	state.raises_st = 0;
+
+	state.active_player = P1;
+
+	if (state.street > STREET_RIVER)
+		return state;
+
+	while (true) {
+		int card_idx = (int)(gto_rng_uniform() * 52.0f);
+		if (card_idx == 52)
+			card_idx = 51;
+
+		int rank = card_idx % 13;
+		int suit = card_idx / 13;
+
+		uint64_t card_mask = 1ULL << (rank + (suit * 16));
+
+		if ((dead_cards & card_mask) == 0) {
+			state.board |= card_mask;
+			break;
+		}
+		//draw again
+	}
+
+	return state;
+}
 
 int get_legal_actions(GameState* state, int *legal_actions_out) {
 	int count = 0;
@@ -298,8 +329,25 @@ int get_legal_actions(GameState* state, int *legal_actions_out) {
 		
 		//only allow raises if we have more than required to call
 		//also need to not hit raise cap
-		if (actor_stack > to_call 
+		if (actor_stack > to_call && state->raises_st < MAX_RAISES_PER_STREET) {
+			legal_actions_out[count++] = 2; //raise size 1
+			legal_actions_out[count++] = 3; //raise size 2
+			legal_actions_out[count++] = 4; //raise size 3
+		}
 	}
+	else {
+		//not facing a bet
+		legal_actions_out[count++] = 0; 
+		
+		//we can only bet if we have chips and raises arent capped
+		if (actor_stack > 0 && state->raises_st < MAX_RAISES_PER_STREET) {
+			legal_actions_out[count++] = 1; //bet size 1
+			legal_actions_out[count++] = 2; //bet size 2
+			legal_actions_out[count++] = 3; //bet size 3
+		}
+	}
+
+	return count;
 }
 
 /*
@@ -347,7 +395,7 @@ static float cfrp(GameState state, int traverser, int iter) {
 		GameState next_state = apply_action(state, action);
 
 		//recursive
-		action_utils[action] = mccfr(next_state, traverser);
+		action_utils[action] = cfrp(next_state, traverser, iter);
 		//calc ev for node
 		node_util += strategy[action] * action_utils[action];
 	}
@@ -368,7 +416,7 @@ static float cfrp(GameState state, int traverser, int iter) {
 		//we are opponent: update avg strat
 		for (int i = 0; i < num_legal_actions; i++) {
 			int action = legal_actions[i];
-			node->strategy_sum[a] += strategy[action] * (float)iter;
+			node->strategy_sum[action] += strategy[action] * (float)iter;
 		}
 	}
 
