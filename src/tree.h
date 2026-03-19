@@ -41,6 +41,8 @@ typedef struct {
 	uint8_t active_player; //0 = P1 (OOP), 1 P2 (IP)
 	uint8_t street; //0 flop, 1 turn, 2 river
 	uint8_t raises_this_street; //cap betting, 3 per street likely
+	uint8_t num_actions_this_street;
+	uint8_t last_action_was_fold;
 } GameState;
 
 typedef struct {
