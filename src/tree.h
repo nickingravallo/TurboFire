@@ -28,6 +28,22 @@ typedef struct PublicNode {
 } PublicNode;
 
 typedef struct {
+	uint64_t board;
+
+	int pot;
+	int p1_stack;
+	int p2_stack;
+
+	//chips put in by respective player
+	int p1_commit;
+	int p2_commit; 
+
+	uint8_t active_player; //0 = P1 (OOP), 1 P2 (IP)
+	uint8_t street; //0 flop, 1 turn, 2 river
+	uint8_t raises_this_street; //cap betting, 3 per street likely
+} GameState;
+
+typedef struct {
 	uint8_t* memory;
 	size_t capacity;
 	size_t offset;
