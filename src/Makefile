@@ -5,10 +5,10 @@ CXXFLAGS = -O3 -std=c++17 -I./omp
 LDFLAGS = 
 
 # All C object files needed
-C_OBJS = main2.o parse.o tree.o indexer.o cfr.o
+C_OBJS = main2.o parse.o tree.o indexer.o showdown.o cfr.o
 
 # All C++ object files needed
-CXX_OBJS = evaluator.o omp/omp/HandEvaluator.o
+CXX_OBJS = evaluator.o omp/HandEvaluator.o
 
 TARGET = turbofire
 

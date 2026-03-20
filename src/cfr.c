@@ -1,6 +1,7 @@
 #include "tree.h"
 #include "indexer.h"
 #include "parse.h"
+#include "showdown.h"
 
 //from regret sums
 void calc_strategy(float* regret_sum, float* strategy, int num_actions, int num_buckets) {
@@ -25,9 +26,9 @@ void calc_strategy(float* regret_sum, float* strategy, int num_actions, int num_
 	}
 }
 
-void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, float* p1_reach, float* p2_reach, float* out_util) {
+void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, float* p1_reach, float* p2_reach, float* out_util, uint64_t* precomputed_masks) {
 	if (node->type == NODE_TERMINAL) {
-		evaluate_showdown(state, map, num_buckets, p1_reach, p2_reach, out_util);
+		evaluate_showdown(state, map, num_buckets, p1_reach, p2_reach, out_util, precomputed_masks);
 		return;
 	}
 
@@ -37,7 +38,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 
 		for (int i = 0; i < node->num_children; i++) {
 			GameState next_state = apply_deal(state, node->dealt_cards[i]);
-			walk_tree(node->children[i], next_state, map, num_buckets, p1_reach, p2_reach, child_util);
+			walk_tree(node->children[i], next_state, map, num_buckets, p1_reach, p2_reach, child_util, precomputed_masks);
 			float p_card = node->chance_weights[i] / 45.0f; //approx unseen cards
 			for (int b = 0; b < num_buckets; b++)
 				out_util[b] += child_util[b] * p_card;
@@ -79,7 +80,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 		GameState next_state = apply_bet(state, legal_actions[a]);
 
 		float* child_util = &action_utils[a * num_buckets];
-		walk_tree(node->children[a], next_state, map, num_buckets, next_p1_reach, next_p2_reach, child_util);
+		walk_tree(node->children[a], next_state, map, num_buckets, next_p1_reach, next_p2_reach, child_util, precomputed_masks);
 
 		//returned utility perspective of child nodes active palye,r we must swap it
 		for (int b = 0; b < num_buckets; b++) {
@@ -115,16 +116,19 @@ void do_cfr_iteration(PublicNode* root, GameState initial_state, IsoMap* map, in
 	float* p1_reach  = (float*)malloc(num_buckets * sizeof(float));
 	float* p2_reach  = (float*)malloc(num_buckets * sizeof(float));
 	float* root_util = (float*)malloc(num_buckets * sizeof(float));
+	uint64_t* precomputed_masks = (uint64_t*)malloc(num_buckets * sizeof(uint64_t));
 
 	for (int i = 0; i < num_buckets; i++) {
 		p1_reach[i] = 1.0f;
 		p2_reach[i] = 1.0f;
 		root_util[i] = 0.0f;
+		precomputed_masks[i] = get_mask_for_bucket(map, i);
 	}
 
-	walk_tree(root, initial_state, map, num_buckets, p1_reach, p2_reach, root_util);
+	walk_tree(root, initial_state, map, num_buckets, p1_reach, p2_reach, root_util, precomputed_masks);
 
 	free(p1_reach);
 	free(p2_reach);
 	free(root_util);
+	free(precomputed_masks);
 }
