@@ -37,7 +37,7 @@ bool is_street_complete(GameState* state) {
 	if (state->num_actions_this_street >= 2 && state->p1_commit == state->p2_commit)
 		return true;
 
-	return false
+	return false;
 }
 
 bool is_hand_over(GameState* state) {
@@ -92,7 +92,7 @@ int generate_bet_sizes(GameState* state, int* out_actions) {
 		if (total_raise_100 > to_call && total_raise_100 < my_stack)
 			out_actions[num_actions++] = total_raise_100;
 
-
+		out_actions[num_actions++] = my_stack;
 	}
 
 	//return the total number of branches generated for this node

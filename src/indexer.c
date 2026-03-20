@@ -6,10 +6,10 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
     
     packed_suits |= (unsigned __int128)((board >> 0) & 0x1FFF) << 0;
     packed_suits |= (unsigned __int128)((private_hand >> 0) & 0x1FFF) << 13;
-    packed_suits |= (unsigned __int128)((board >> 13) & 0x1FFF) << 26;
-    packed_suits |= (unsigned __int128)((private_hand >> 13) & 0x1FFF) << 39;
-    packed_suits |= (unsigned __int128)((board >> 26) & 0x1FFF) << 52;
-    packed_suits |= (unsigned __int128)((private_hand >> 26) & 0x1FFF) << 65;
+    packed_suits |= (unsigned __int128)((board >> 16) & 0x1FFF) << 26;
+    packed_suits |= (unsigned __int128)((private_hand >> 16) & 0x1FFF) << 39;
+    packed_suits |= (unsigned __int128)((board >> 32) & 0x1FFF) << 52;
+    packed_suits |= (unsigned __int128)((private_hand >> 32) & 0x1FFF) << 65;
     packed_suits |= (unsigned __int128)((board >> 48) & 0x1FFF) << 78;
     packed_suits |= (unsigned __int128)((private_hand >> 48) & 0x1FFF) << 91;
 

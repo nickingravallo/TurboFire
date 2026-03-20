@@ -55,4 +55,10 @@ void arena_init(Arena* a, size_t size);
 
 void* arena_alloc(Arena* a, size_t size);
 
+PublicNode* build_public_tree(Arena* arena, GameState state, int num_buckets);
+
+int generate_bet_sizes(GameState* state, int* out_actions);
+GameState apply_deal(GameState current_state, int card_idx);
+GameState apply_bet(GameState current_state, int action_amount);
+
 #endif //TREE_H
