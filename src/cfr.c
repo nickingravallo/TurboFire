@@ -112,15 +112,15 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 	free(action_utils);
 }
 
-void do_cfr_iteration(PublicNode* root, GameState initial_state, IsoMap* map, int num_buckets) {
+void do_cfr_iteration(PublicNode* root, GameState initial_state, IsoMap* map, int num_buckets, float* p1_starting_range, float* p2_starting_range) {
 	float* p1_reach  = (float*)malloc(num_buckets * sizeof(float));
 	float* p2_reach  = (float*)malloc(num_buckets * sizeof(float));
 	float* root_util = (float*)malloc(num_buckets * sizeof(float));
 	uint64_t* precomputed_masks = (uint64_t*)malloc(num_buckets * sizeof(uint64_t));
 
 	for (int i = 0; i < num_buckets; i++) {
-		p1_reach[i] = 1.0f;
-		p2_reach[i] = 1.0f;
+		p1_reach[i] = p1_starting_range[i];
+		p2_reach[i] = p2_starting_range[i];
 		root_util[i] = 0.0f;
 		precomputed_masks[i] = get_mask_for_bucket(map, i);
 	}
