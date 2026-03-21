@@ -160,35 +160,58 @@ void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
 }
 
 
-int main() {
+// (Make sure to paste the sb_hu_json string I gave you earlier right up here, 
+// along with your BTN json string)
+extern const char* sb_hu_json; // Replace with actual string if not in a header
+extern const char* btn_json;   // Replace with actual string if not in a header
+
+int main(int argc, char** argv) {
     printf("Initializing TurboFire Engine...\n\n");
 
-    // 1. Define the Flop (Ace of Spades, 8 of Spades, 2 of Spades)
-    uint64_t As = 1ULL << 12;
-    uint64_t Eights = 1ULL << 6;
-    uint64_t Twos = 1ULL << 0;
-    uint64_t flop_board = As | Eights | Twos;
+    // 1. Check CLI Arguments
+    if (argc < 5) {
+        printf("ERROR: Missing arguments.\n");
+        printf("Usage:   ./turbofire \"<board>\" <pot> <p1_stack> <p2_stack>\n");
+        printf("Example: ./turbofire \"As 8s 2s\" 200 300 300\n\n");
+        return 1;
+    }
 
-    // 2. Build the Isomorphism Map
+    // 2. Parse the CLI arguments
+    const char* board_str = argv[1];
+    int pot_size = atoi(argv[2]);
+    int p1_stack = atoi(argv[3]);
+    int p2_stack = atoi(argv[4]);
+
+    printf("--- GAME STATE CONFIGURATION ---\n");
+    printf("Board:    %s\n", board_str);
+    printf("Pot:      %d\n", pot_size);
+    printf("P1 Stack: %d\n", p1_stack);
+    printf("P2 Stack: %d\n", p2_stack);
+    printf("--------------------------------\n\n");
+
+    // 3. Define the Flop dynamically from the string
+    uint64_t flop_board = parse_board_string(board_str);
+
+    // 4. Build the Isomorphism Map
     printf("Building Flop Isomorphism Map...\n");
     IsoMap flop_map;
     build_isomorphism_map(flop_board, &flop_map);
     printf("-> Unique Buckets: %d\n", flop_map.num_unique_buckets);
     printf("-> SIMD Padded Buckets: %d\n\n", flop_map.padded_buckets);
 
-    // 3. Initialize the Memory Arena
+    // 5. Initialize the Memory Arena
     printf("Allocating Memory Arena...\n");
     Arena arena;
-    size_t arena_size = 2ULL * 1024 * 1024 * 1024; // 2 Gigabytes
+    size_t arena_size = 8ULL * 1024 * 1024 * 1024; // 2 Gigabytes
     arena_init(&arena, arena_size);
     printf("-> Arena Initialized.\n\n");
 
-    // 4. Setup the Initial GameState (3-Bet Pot)
+    // 6. Setup the Initial GameState using the CLI variables
     GameState root_state = {0};
     root_state.board = flop_board;
-    root_state.pot = 200;                  
-    root_state.p1_stack = 300;             
-    root_state.p2_stack = 300;             
+    root_state.pot = pot_size;                  
+    root_state.p1_stack = p1_stack;             
+    root_state.p2_stack = p2_stack;             
     root_state.p1_commit = 0;
     root_state.p2_commit = 0;
     root_state.active_player = 0;          
@@ -197,11 +220,11 @@ int main() {
     root_state.num_actions_this_street = 0;
     root_state.last_action_was_fold = 0;
 
-    // 5. Build the Game Tree!
+    // 7. Build the Game Tree
     printf("Building Public State Tree (This might take a second)...\n");
     PublicNode* root = build_public_tree(&arena, root_state, flop_map.padded_buckets);
 
-    // 6. Verify and Count
+    // 8. Verify and Count
     printf("Traversing tree to count nodes...\n");
     size_t total_nodes = count_nodes(root);
     
@@ -221,10 +244,10 @@ int main() {
     printf("Loading Preflop Ranges...\n");
     
     PlayerRange p1_raw_range = {0};
-    parse_json_range(sb, &p1_raw_range);
+    parse_json_range(sb, &p1_raw_range); // Pass the actual string variables
 
     PlayerRange p2_raw_range = {0};
-    parse_json_range(btn, &p2_raw_range);
+    parse_json_range(btn, &p2_raw_range);   // Pass the actual string variables
 
     // Convert raw parsed masks into bucketed probability arrays
     float* p1_starting_reach = (float*)malloc(flop_map.padded_buckets * sizeof(float));
@@ -241,10 +264,8 @@ int main() {
 
     // The core execution loop
     for (int i = 0; i < num_iterations; i++) {
-        // Pass the new reach arrays into the iteration
         do_cfr_iteration(root, root_state, &flop_map, flop_map.padded_buckets, p1_starting_reach, p2_starting_reach);
         
-        // Print a progress update every 10 iterations
         if ((i + 1) % 10 == 0) {
             printf("Completed %d / %d iterations...\n", i + 1, num_iterations);
         }
@@ -259,13 +280,14 @@ int main() {
     printf("Speed: %.4f seconds per iteration\n", time_spent / num_iterations);
     printf("========================================\n");
 
+    // Print the colored ASCII Grid
     print_root_strategy(root, &flop_map, flop_map.padded_buckets);
     
     // Free the reach arrays
     free(p1_starting_reach);
     free(p2_starting_reach);
 
-    // NOW we safely free the arena back to the OS
+    // Safely free the arena back to the OS
     free(arena.memory);
 
     return 0;

@@ -19,5 +19,6 @@ typedef struct {
 void parse_json_range(const char* json_string, PlayerRange* out_range);
 void apply_card_removal(PlayerRange* range, uint64_t dead_cards);
 void print_range_grid(const PlayerRange* range);
+uint64_t parse_board_string(const char* board_str);
 
 #endif //PARSE_H
