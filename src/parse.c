@@ -30,7 +30,6 @@ uint64_t parse_board_string(const char* board_str) {
 
 		int rank = char_to_rank(board_str[i]);
 		int suit = char_to_suit(board_str[i+1]);
-
 		if (rank != -1 && suit != -1)
 			board_mask |= (1ULL << (rank + (suit * 16)));
 

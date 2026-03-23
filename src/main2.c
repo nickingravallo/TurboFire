@@ -164,7 +164,18 @@ void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
 // along with your BTN json string)
 extern const char* sb_hu_json; // Replace with actual string if not in a header
 extern const char* btn_json;   // Replace with actual string if not in a header
-
+// Finds the index of a specific action so we can traverse down the tree
+int get_action_index(GameState state, int target_action) {
+    int legal_actions[8];
+    int num_actions = generate_bet_sizes(&state, legal_actions); // Assuming this returns the count
+    
+    for (int i = 0; i < num_actions; i++) {
+        if (legal_actions[i] == target_action) {
+            return i;
+        }
+    }
+    return -1; // Action not found
+}
 int main(int argc, char** argv) {
     printf("Initializing TurboFire Engine...\n\n");
 
@@ -279,15 +290,63 @@ int main(int argc, char** argv) {
     printf("Total Time: %.2f seconds\n", time_spent);
     printf("Speed: %.4f seconds per iteration\n", time_spent / num_iterations);
     printf("========================================\n");
+// --- INTERACTIVE EXPLORER ---
+    PublicNode* current_node = root;
+    GameState current_state = root_state;
 
-    // Print the colored ASCII Grid
-    print_root_strategy(root, &flop_map, flop_map.padded_buckets);
-    
-    // Free the reach arrays
+    char input[64];
+    while (1) {
+        // 1. FIRST check if the hand is over (Fixes the Segfault)
+        if (current_node->type == NODE_TERMINAL) {
+            printf("\n========================================\n");
+            printf("[ TERMINAL NODE REACHED. FLOP ACTION COMPLETE. ]\n");
+            printf("Final Pot: %d | P1 Commit: %d | P2 Commit: %d\n", 
+                   current_state.pot, current_state.p1_commit, current_state.p2_commit);
+            printf("========================================\n\n");
+            break;
+        }
+
+        // 2. Print the strategy for the current node
+        printf("\n--- CURRENT NODE STRATEGY (Player %d) ---\n", current_state.active_player + 1);
+        printf("Pot: %d | P1 Stack: %d | P2 Stack: %d\n", current_state.pot, current_state.p1_stack, current_state.p2_stack);
+        print_root_strategy(current_node, &flop_map, flop_map.padded_buckets);
+
+        // 3. Dynamically generate and print the exact legal actions for this node
+        int legal_actions[8];
+        int num_actions = generate_bet_sizes(&current_state, legal_actions);
+        
+        printf("Legal Actions: ");
+        for (int i = 0; i < num_actions; i++) {
+            if (legal_actions[i] == -1) printf("[-1: Fold] ");
+            else if (legal_actions[i] == 0) printf("[0: Check/Call] ");
+            else printf("[%d: Bet/Raise] ", legal_actions[i]);
+        }
+        printf("\n");
+
+        // 4. Ask the user for input
+        printf("Enter action amount to step forward (Or type 'q' to quit): ");
+        
+        if (fgets(input, sizeof(input), stdin) == NULL) break;
+        if (input[0] == 'q' || input[0] == 'Q') break;
+
+        int chosen_action = atoi(input);
+
+        // 5. Find the child node that matches this action
+        int child_idx = get_action_index(current_state, chosen_action);
+        
+        if (child_idx == -1) {
+            printf("\n[!] INVALID ACTION. Please type one of the exact numbers listed above.\n");
+            continue;
+        }
+
+        // 6. Move the pointers forward!
+        current_node = current_node->children[child_idx];
+        current_state = apply_bet(current_state, chosen_action);
+    }
+
+   // Free the reach arrays and arena
     free(p1_starting_reach);
     free(p2_starting_reach);
-
-    // Safely free the arena back to the OS
     free(arena.memory);
 
     return 0;
