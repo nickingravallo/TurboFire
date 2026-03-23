@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
     // 5. Initialize the Memory Arena
     printf("Allocating Memory Arena...\n");
     Arena arena;
-    size_t arena_size = 8ULL * 1024 * 1024 * 1024; // 2 Gigabytes
+    size_t arena_size = 2ULL * 1024 * 1024 * 1024; // 2 Gigabytes
     arena_init(&arena, arena_size);
     printf("-> Arena Initialized.\n\n");
 

@@ -44,59 +44,66 @@ bool is_hand_over(GameState* state) {
 	if (state->last_action_was_fold == 1)
 		return true;
 
-	if (state->street == 2 && is_street_complete(state))
+	if (state->street == 0 && is_street_complete(state))
 		return true;
 
 	return false;
 }
 
 int generate_bet_sizes(GameState* state, int* out_actions) {
-	int num_actions = 0;
-    
-	int active = state->active_player;
-	int my_commit  = (active == 0) ? state->p1_commit : state->p2_commit;
-	int opp_commit = (active == 0) ? state->p2_commit : state->p1_commit;
-	int my_stack   = (active == 0) ? state->p1_stack  : state->p2_stack;
+	int count = 0;
 
-	int to_call = opp_commit - my_commit;
+	int facing_bet = (state->active_player == 0) ?
+		state->p2_commit - state->p1_commit :
+		state->p1_commit - state->p2_commit;
+
+	if (facing_bet > 0)
+		out_actions[count++] = -1; //fold is always an option if its a bet or raise
 	
-	// 1 -> fold
-	if (to_call > 0) 
-        	out_actions[num_actions++] = -1; 
+	//check/call alaways option
+	out_actions[count++] = 0; //0 means check (if facing bet == 0) or call ( facing bet > 0)
+	
+	//calc effective stack and pot
+	int current_stack = (state->active_player == 0) ?
+		state->p1_stack :
+		state->p2_stack;
+	int current_pot = state->pot;
 
-	// 2-> check or call
-	if (to_call == 0)
-		out_actions[num_actions++] = 0; // Check
+	//spr abstraction, if stack is tiny relative to pot only go all in
+	if (current_stack <= current_pot) {
+		if (current_stack > 0)
+			out_actions[count++] = current_stack; //all-in
+		return count;
+	}
+
+
+	//raise cap 
+	if (state->raises_this_street >= 2) {
+		if (current_stack > 0)
+			out_actions[count++] = current_stack;
+		return count;
+	}
+
+	if (facing_bet == 0) {
+		int bet_33 = current_pot / 3;
+		int bet_75 = (current_pot * 3) / 4;
+
+		//only add bets if they dont exceed stack
+		if (bet_33 > 0 && bet_33 < current_stack)
+			out_actions[count++] = bet_33;
+		if (bet_75 > bet_33 && bet_75 < current_stack)
+			out_actions[count++] = bet_75;
+	}
 	else {
-		//cap at stack
-		int call_amount = (my_stack < to_call) ? my_stack : to_call;
-		out_actions[num_actions++] = call_amount; // Call
+		int raise_amount = facing_bet * 3;
+		if (raise_amount > 0 && raise_amount < current_stack)
+			out_actions[count++] = raise_amount;
 	}
-
-	// 3-> bet or raise
-	if (state->raises_this_street < 3 && my_stack > to_call) { 
-		int current_pot = state->pot + to_call;
-
-		int bet_33  = (current_pot * 33) / 100;
-		int bet_52  = (current_pot * 52) / 100;
-		int bet_100 = (current_pot);
-
-		int total_raise_33  = to_call + bet_33;
-		int total_raise_52  = to_call + bet_52;
-		int total_raise_100 = to_call + bet_100;
-
-		if (total_raise_33 > to_call && total_raise_33 < my_stack)
-			out_actions[num_actions++] = total_raise_33;
-		if (total_raise_52 > to_call && total_raise_52 < my_stack)
-			out_actions[num_actions++] = total_raise_52;
-		if (total_raise_100 > to_call && total_raise_100 < my_stack)
-			out_actions[num_actions++] = total_raise_100;
-
-		out_actions[num_actions++] = my_stack;
+	if (current_stack > 0) {
+		if (count == 0 || out_actions[count-1] != current_stack)
+			out_actions[count++] = current_stack;
 	}
-
-	//return the total number of branches generated for this node
-	return num_actions; 
+	return count;
 }
 
 GameState apply_bet(GameState current_state, int action_amount) {
@@ -109,14 +116,24 @@ GameState apply_bet(GameState current_state, int action_amount) {
 		return next_state;
 	}
 
+	int chips_to_add = action_amount;
+	if (action_amount == 0) {
+		int facing_bet = (current_state.active_player == 0) ?
+			current_state.p2_commit - current_state.p1_commit :
+			current_state.p1_commit - current_state.p2_commit;
+
+		if (facing_bet > 0)
+			chips_to_add = facing_bet; //call to match bet
+	}
+
 	//move from stack to committed amount
 	if (next_state.active_player == 0) { //p1 oop
-		next_state.p1_commit += action_amount;
-		next_state.p1_stack -= action_amount;
+		next_state.p1_commit += chips_to_add;
+		next_state.p1_stack -= chips_to_add;
 	}
 	else { //p2 ip
-		next_state.p2_commit += action_amount;
-		next_state.p2_stack  -= action_amount;
+		next_state.p2_commit += chips_to_add;
+		next_state.p2_stack  -= chips_to_add;
 	}
 
 	next_state.pot += action_amount;
