@@ -255,10 +255,10 @@ int main(int argc, char** argv) {
     printf("Loading Preflop Ranges...\n");
     
     PlayerRange p1_raw_range = {0};
-    parse_json_range(sb, &p1_raw_range); // Pass the actual string variables
+    parse_json_range(sb, &p1_raw_range); // FIXED Variable Name
 
     PlayerRange p2_raw_range = {0};
-    parse_json_range(btn, &p2_raw_range);   // Pass the actual string variables
+    parse_json_range(btn, &p2_raw_range);   // FIXED Variable Name
 
     // Convert raw parsed masks into bucketed probability arrays
     float* p1_starting_reach = (float*)malloc(flop_map.padded_buckets * sizeof(float));
@@ -290,28 +290,73 @@ int main(int argc, char** argv) {
     printf("Total Time: %.2f seconds\n", time_spent);
     printf("Speed: %.4f seconds per iteration\n", time_spent / num_iterations);
     printf("========================================\n");
-// --- INTERACTIVE EXPLORER ---
+
+    // --- INTERACTIVE EXPLORER ---
     PublicNode* current_node = root;
     GameState current_state = root_state;
-
+    
+    // Allocate memory to track the live ranges as we walk down the tree
+    float* live_p1_reach = (float*)malloc(flop_map.padded_buckets * sizeof(float));
+    float* live_p2_reach = (float*)malloc(flop_map.padded_buckets * sizeof(float));
+    
+    // Copy the starting ranges into the live trackers
+    for (int i = 0; i < flop_map.padded_buckets; i++) {
+        live_p1_reach[i] = p1_starting_reach[i];
+        live_p2_reach[i] = p2_starting_reach[i];
+    }
+    
     char input[64];
     while (1) {
-        // 1. FIRST check if the hand is over (Fixes the Segfault)
+        // 1. Check if the hand ended early (Fold or All-In Showdown)
         if (current_node->type == NODE_TERMINAL) {
             printf("\n========================================\n");
-            printf("[ TERMINAL NODE REACHED. FLOP ACTION COMPLETE. ]\n");
+            printf("[ TERMINAL NODE REACHED. HAND OVER. ]\n");
             printf("Final Pot: %d | P1 Commit: %d | P2 Commit: %d\n", 
                    current_state.pot, current_state.p1_commit, current_state.p2_commit);
             printf("========================================\n\n");
             break;
         }
 
-        // 2. Print the strategy for the current node
+        // 2. NEW: Catch the Turn Card! (The end of the Flop action)
+        if (current_node->type == NODE_CHANCE) {
+            printf("\n========================================\n");
+            printf("[ FLOP ACTION COMPLETE. DEALING TURN... ]\n");
+            printf("Final Flop Pot: %d\n", current_state.pot);
+            printf("========================================\n\n");
+
+            printf("--- P1 TURN STARTING RANGE (Top 10 Hands by frequency) ---\n");
+            int printed = 0;
+            char ranks[] = "23456789TJQKA";
+            char suits[] = "shdc"; 
+            
+            for (int combo = 0; combo < 1326; combo++) {
+                int bucket = flop_map.combo_to_bucket[combo];
+                if (bucket == -1) continue;
+                
+                // If they have a realistic chance of holding this hand on the turn
+                if (live_p1_reach[bucket] > 0.05f) {
+                    int c1 = 0, c2 = 0, counter = 0;
+                    for (int i = 0; i < 51; i++) {
+                        for (int j = i + 1; j < 52; j++) {
+                            if (counter == combo) { c1 = i; c2 = j; break; }
+                            counter++;
+                        }
+                        if (c1 || c2) break;
+                    }
+                    printf("%c%c %c%c : %6.2f%%\n", ranks[c1%13], suits[c1/13], ranks[c2%13], suits[c2/13], live_p1_reach[bucket] * 100.0f);
+                    printed++;
+                    if (printed >= 10) break;
+                }
+            }
+            break; // Exit the loop, the Flop solver's job is done!
+        }
+
+        // 3. Print the strategy for the current node
         printf("\n--- CURRENT NODE STRATEGY (Player %d) ---\n", current_state.active_player + 1);
         printf("Pot: %d | P1 Stack: %d | P2 Stack: %d\n", current_state.pot, current_state.p1_stack, current_state.p2_stack);
         print_root_strategy(current_node, &flop_map, flop_map.padded_buckets);
 
-        // 3. Dynamically generate and print the exact legal actions for this node
+        // 4. Dynamically generate and print the exact legal actions for this node
         int legal_actions[8];
         int num_actions = generate_bet_sizes(&current_state, legal_actions);
         
@@ -323,7 +368,7 @@ int main(int argc, char** argv) {
         }
         printf("\n");
 
-        // 4. Ask the user for input
+        // 5. Ask the user for input
         printf("Enter action amount to step forward (Or type 'q' to quit): ");
         
         if (fgets(input, sizeof(input), stdin) == NULL) break;
@@ -331,7 +376,7 @@ int main(int argc, char** argv) {
 
         int chosen_action = atoi(input);
 
-        // 5. Find the child node that matches this action
+        // 6. Find the child node that matches this action
         int child_idx = get_action_index(current_state, chosen_action);
         
         if (child_idx == -1) {
@@ -339,7 +384,15 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // 6. Move the pointers forward!
+        // 7. --- FORWARD REACH EXTRACTION ---
+        // MUST happen BEFORE we move the pointers forward!
+        if (current_state.active_player == 0) {
+            extract_action_range(current_node, flop_map.padded_buckets, child_idx, live_p1_reach, live_p1_reach);
+        } else {
+            extract_action_range(current_node, flop_map.padded_buckets, child_idx, live_p2_reach, live_p2_reach);
+        }
+
+        // 8. Move the pointers forward
         current_node = current_node->children[child_idx];
         current_state = apply_bet(current_state, chosen_action);
     }
@@ -347,6 +400,8 @@ int main(int argc, char** argv) {
    // Free the reach arrays and arena
     free(p1_starting_reach);
     free(p2_starting_reach);
+    free(live_p1_reach);
+    free(live_p2_reach);
     free(arena.memory);
 
     return 0;

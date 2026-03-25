@@ -44,7 +44,7 @@ bool is_hand_over(GameState* state) {
 	if (state->last_action_was_fold == 1)
 		return true;
 
-	if (state->street == 0 && is_street_complete(state))
+	if (state->street == 2 && is_street_complete(state))
 		return true;
 
 	return false;

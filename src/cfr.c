@@ -132,3 +132,22 @@ void do_cfr_iteration(PublicNode* root, GameState initial_state, IsoMap* map, in
 	free(root_util);
 	free(precomputed_masks);
 }
+
+//extract narrowed range after action of node
+void extract_action_range(PublicNode* node, int num_buckets, int action_idx, float* current_reach, float* out_new_reach) {
+	for (int b = 0; b < num_buckets; b++) {
+		float sum = 0.0f;
+
+		//find total strategy sum for this hand / bucket
+		for (int a = 0; a < node->num_children; a++)
+			sum += node->strategy_sum[(a*num_buckets) + b];
+
+		//calculate normalized prob of action thats taken
+		float action_prob = 0.0f;
+		if (sum > 0.0f)
+			action_prob = node->strategy_sum[(action_idx * num_buckets) + b] / sum;
+
+		//the new reach is old reach * strategy frequency
+		out_new_reach[b] = current_reach[b] * action_prob;
+	}
+}
