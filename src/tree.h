@@ -52,7 +52,7 @@ typedef struct {
 } Arena;
 
 void arena_init(Arena* a, size_t size);
-
+void arena_reset(Arena* a);
 void* arena_alloc(Arena* a, size_t size);
 
 PublicNode* build_public_tree(Arena* arena, GameState state, int num_buckets);

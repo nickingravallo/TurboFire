@@ -1,10 +1,12 @@
 #include "tree.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <sys/mman.h>
 
 void arena_init(Arena* a, size_t size) {
-	a->memory = (uint8_t*)malloc(size);
-	if (!a->memory) {
+	// MAP_ANON | MAP_PRIVATE asks the Mac kernel directly for massive virtual memory
+	a->memory = (uint8_t*)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+	if (a->memory == MAP_FAILED) {
 		printf("cant allocate %zu bytes for arena\n", size);
 		exit(1);
 	}
@@ -23,6 +25,10 @@ void* arena_alloc(Arena* a, size_t size) {
 	void* ptr = a->memory + a->offset;
 	a->offset +=aligned_size;
 	return ptr;
+}
+
+void arena_reset(Arena* a) {
+	a->offset = 0;
 }
 
 bool is_street_complete(GameState* state) {
