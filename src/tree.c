@@ -92,13 +92,21 @@ int generate_bet_sizes(GameState* state, int* out_actions) {
 
 	if (facing_bet == 0) {
 		int bet_33 = current_pot / 3;
-		int bet_75 = (current_pot * 3) / 4;
+		int bet_52 = current_pot / 2;	
+		int bet_100 = current_pot;
+		int bet_123 = (current_pot + (current_pot * 0.23));
 
 		//only add bets if they dont exceed stack
 		if (bet_33 > 0 && bet_33 < current_stack)
 			out_actions[count++] = bet_33;
-		if (bet_75 > bet_33 && bet_75 < current_stack)
-			out_actions[count++] = bet_75;
+		if (bet_52 > bet_33 && bet_52 < current_stack)
+			out_actions[count++] = bet_52;
+		if (bet_100 > bet_52 && bet_100 < current_stack)
+			out_actions[count++] = bet_100;
+		if (bet_123 > bet_100 && bet_123 < current_stack)
+			out_actions[count++] = bet_123;
+
+
 	}
 	else {
 		int raise_amount = facing_bet * 3;

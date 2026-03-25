@@ -57,25 +57,51 @@ void convert_range_to_buckets(PlayerRange* range, IsoMap* map, float* out_reach_
     }
 }
 
-// Aggregates strategy into a 13x13 grid, colored by the dominant action
-void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
-    printf("\n--- P1 FLOP STRATEGY GRID (Dominant Action) ---\n");
+// Aggregates strategy into a 13x13 grid, filtering out folded hands and dynamically coloring actions
+void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num_buckets, float* current_reach) {
+    int legal_actions[8];
+    int num_actions = generate_bet_sizes(&state, legal_actions);
 
-    int num_actions = root->num_children;
-    float grid_probs[13][13][8] = {0}; // Up to 8 actions
+    printf("\n--- PLAYER %d STRATEGY GRID (Dominant Action) ---\n", state.active_player + 1);
+
+    // 1. Define a generous color palette for up to 8 actions
+    const char* colors[] = {
+        "\x1b[36m",   // Cyan (Fold)
+        "\x1b[32m",   // Green (Check/Call)
+        "\x1b[33m",   // Yellow (Bet/Raise 1)
+        "\x1b[35m",   // Magenta (Bet/Raise 2)
+        "\x1b[34m",   // Blue (Bet/Raise 3)
+        "\x1b[31m",   // Red (Bet/Raise 4)
+        "\x1b[1;31m", // Bold Red (All-In / Bet 5)
+        "\x1b[37m"    // White (Fallback)
+    };
+    const char* reset = "\x1b[0m";
+
+    // 2. Dynamically print the legend based on the exact legal actions
+    printf("Legend: ");
+    for (int i = 0; i < num_actions; i++) {
+        int color_idx = (i < 8) ? i : 7;
+        if (legal_actions[i] == -1) printf("%sFold%s | ", colors[color_idx], reset);
+        else if (legal_actions[i] == 0) printf("%sCheck/Call%s | ", colors[color_idx], reset);
+        else printf("%sBet %d%s | ", colors[color_idx], legal_actions[i], reset);
+    }
+    printf("\b\b  \n\n"); // Clean up the trailing pipe
+
+    float grid_probs[13][13][8] = {0}; 
     int grid_counts[13][13] = {0};
 
-    // 1. Accumulate probabilities for every valid combo
+    // 3. Accumulate probabilities ONLY for hands that are physically possible AND in your range
     for (int combo = 0; combo < 1326; combo++) {
         int bucket = map->combo_to_bucket[combo];
-        if (bucket == -1) continue;
+        if (bucket == -1) continue; // Physically dead card
+
+        // --- THE FIX: Ignore hands that have been folded (Strategic Dead Cards) ---
+        if (current_reach[bucket] < 0.0001f) continue; 
 
         float sum = 0.0f;
         for (int a = 0; a < num_actions; a++) {
             sum += root->strategy_sum[(a * num_buckets) + bucket];
         }
-        
-        // Skip dead hands (this filters out the 20/20/20 splits)
         if (sum == 0.0f) continue; 
 
         // Reconstruct the cards
@@ -93,16 +119,14 @@ void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
         int rank_high = (r1 > r2) ? r1 : r2;
         int rank_low  = (r1 < r2) ? r1 : r2;
 
-        // Map to 13x13 coordinates (A=0, K=1, ..., 2=12)
         int row = 12 - rank_high; 
         int col = 12 - rank_low;
 
         int grid_r, grid_c;
-        if (s1 == s2) { grid_r = row; grid_c = col; }        // Suited: Top-Right
-        else if (r1 == r2) { grid_r = row; grid_c = col; }   // Pair: Diagonal
-        else { grid_r = col; grid_c = row; }                 // Offsuit: Bottom-Left
+        if (s1 == s2) { grid_r = row; grid_c = col; }        
+        else if (r1 == r2) { grid_r = row; grid_c = col; }   
+        else { grid_r = col; grid_c = row; }                 
 
-        // Add this combo's normalized strategy to the cell's running total
         grid_counts[grid_r][grid_c]++;
         for (int a = 0; a < num_actions; a++) {
             float prob = root->strategy_sum[(a * num_buckets) + bucket] / sum;
@@ -110,21 +134,8 @@ void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
         }
     }
 
-    // 2. Setup ANSI Colors for the terminal
+    // 4. Print the Grid
     const char rank_chars[] = "AKQJT98765432";
-    const char* colors[] = {
-        "\x1b[32m",   // 0: Check (Green)
-        "\x1b[33m",   // 1: Bet 33 (Yellow)
-        "\x1b[35m",   // 2: Bet 52 (Magenta)
-        "\x1b[31m",   // 3: Bet 100 (Red)
-        "\x1b[1;31m", // 4: All-In (Bold Red)
-    };
-    const char* reset = "\x1b[0m";
-
-    printf("Legend: %sCheck%s | %sBet 33%%%s | %sBet 52%%%s | %sBet 100%%%s | %sAll-In%s\n\n",
-        colors[0], reset, colors[1], reset, colors[2], reset, colors[3], reset, colors[4], reset);
-
-    // 3. Print the Grid
     printf("    ");
     for (int i = 0; i < 13; i++) printf("  %c  ", rank_chars[i]);
     printf("\n");
@@ -134,10 +145,9 @@ void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
         for (int c = 0; c < 13; c++) {
             
             if (grid_counts[r][c] == 0) {
-                // No valid combos exist for this hand class
+                // Hand is completely folded out or physically dead
                 printf("  -  ");
             } else {
-                // Find the dominant action for this hand class
                 int dom_a = 0;
                 float max_p = -1.0f;
                 for (int a = 0; a < num_actions; a++) {
@@ -149,9 +159,8 @@ void print_root_strategy(PublicNode* root, IsoMap* map, int num_buckets) {
                 }
                 
                 float print_pct = max_p * 100.0f;
-                int color_idx = dom_a % 5;
+                int color_idx = (dom_a < 8) ? dom_a : 7;
                 
-                // Print the percentage wrapped in the correct ANSI color code
                 printf("%s%3.0f%%%s ", colors[color_idx], print_pct, reset);
             }
         }
@@ -331,23 +340,34 @@ int main(int argc, char** argv) {
     convert_range_to_buckets(&p1_raw_range, &flop_map, p1_starting_reach);
     convert_range_to_buckets(&p2_raw_range, &flop_map, p2_starting_reach);
 
-    // --- SOLVER EXECUTION (FLOP) ---
+// --- SOLVER EXECUTION (FLOP) ---
     printf("Starting DCFR Solver...\n");
-    int num_iterations = 100; 
-    clock_t start_time = clock();
+    int num_iterations = 50; 
+    
+    clock_t total_start_time = clock();
+    clock_t chunk_start_time = clock();
 
     for (int i = 0; i < num_iterations; i++) {
         do_cfr_iteration(root, root_state, &flop_map, flop_map.padded_buckets, p1_starting_reach, p2_starting_reach);
-        if ((i + 1) % 10 == 0) printf("Completed %d / %d iterations...\n", i + 1, num_iterations);
+        
+        if ((i + 1) % 10 == 0) {
+            clock_t chunk_end_time = clock();
+            double chunk_time = (double)(chunk_end_time - chunk_start_time) / CLOCKS_PER_SEC;
+            
+            printf("Completed %d / %d iterations... [%.2f seconds]\n", i + 1, num_iterations, chunk_time);
+            
+            // Reset the chunk timer for the next batch
+            chunk_start_time = clock(); 
+        }
     }
 
-    clock_t end_time = clock();
-    double time_spent = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+    clock_t total_end_time = clock();
+    double total_time_spent = (double)(total_end_time - total_start_time) / CLOCKS_PER_SEC;
 
     printf("\n========================================\n");
     printf("SOLVER FINISHED\n");
-    printf("Total Time: %.2f seconds\n", time_spent);
-    printf("Speed: %.4f seconds per iteration\n", time_spent / num_iterations);
+    printf("Total Time: %.2f seconds\n", total_time_spent);
+    printf("Speed: %.4f seconds per iteration\n", total_time_spent / num_iterations);
     printf("========================================\n");
 
     // --- INTERACTIVE EXPLORER ---
@@ -467,7 +487,10 @@ int main(int argc, char** argv) {
 
         printf("\n--- CURRENT NODE STRATEGY (Player %d) ---\n", current_state.active_player + 1);
         printf("Pot: %d | P1 Stack: %d | P2 Stack: %d\n", current_state.pot, current_state.p1_stack, current_state.p2_stack);
-        print_root_strategy(current_node, &flop_map, flop_map.padded_buckets);
+
+	// Pass the state and the correct live range so it can filter out folded hands!
+        float* active_reach = (current_state.active_player == 0) ? live_p1_reach : live_p2_reach;
+        print_root_strategy(current_node, current_state, &flop_map, flop_map.padded_buckets, active_reach);
 
         int legal_actions[8];
         int num_actions = generate_bet_sizes(&current_state, legal_actions);
