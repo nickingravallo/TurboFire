@@ -1,27 +1,57 @@
+#include <omp.h> 
 #include "tree.h"
 #include "indexer.h"
 #include "parse.h"
 #include "showdown.h"
 
+#include <string.h>
+#include <stdlib.h>
+
 //from regret sums
 void calc_strategy(float* regret_sum, float* strategy, int num_actions, int num_buckets) {
+	//copy positive regrets
+	#pragma omp parallel if (num_buckets > 500)
+	{
+		for (int a = 0; a < num_actions; a++) {
+			#pragma omp for simd
+			for (int b = 0; b < num_buckets; b++) {
+				int idx = (a * num_buckets) + b;
+				strategy[idx] = regret_sum[idx] > 0.0f ? regret_sum[idx] : 0.0f;
+			}
+		}
+	}
+
+	//normalize
+	#pragma omp parallel for simd if (num_buckets > 500)
 	for (int b = 0; b < num_buckets; b++) {
 		float normalizing_sum = 0.0f;
 
-		//sum of all pos regrets
-		for (int a = 0; a < num_actions; a++) {
-			int idx = (a * num_buckets) + b;
-			strategy[idx] = regret_sum[idx] > 0.0f ? regret_sum[idx] : 0.0f;
-			normalizing_sum += strategy[idx];
-		}
+		for (int a = 0; a < num_actions; a++)
+			normalizing_sum += strategy[(a * num_buckets) + b];
 
-		//normalize
 		for (int a = 0; a < num_actions; a++) {
 			int idx = (a * num_buckets) + b;
 			if (normalizing_sum > 0.0f)
 				strategy[idx] /= normalizing_sum;
 			else
 				strategy[idx] = 1.0f/(float)num_actions;
+		}
+	}
+}
+
+//calculate avg strategy for best response evaluation
+void calc_average_strategy(float* strategy_sum, float* avg_strategy, int num_actions, int num_buckets) {
+	#pragma omp parallel for simd if(num_buckets > 500)
+	for (int b = 0; b < num_buckets; b++) {
+		float sum = 0.0f;
+		for (int a = 0; a < num_actions; a++)
+			sum += strategy_sum[(a * num_buckets) + b];
+		for (int a = 0; a < num_actions; a++) {
+			int idx = (a * num_buckets) + b;
+			if (sum > 0.0f)
+				avg_strategy[idx] = strategy_sum[idx] / sum;
+			else
+				avg_strategy[idx] = 1.0f / (float)num_actions;
 		}
 	}
 }
@@ -40,6 +70,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 			GameState next_state = apply_deal(state, node->dealt_cards[i]);
 			walk_tree(node->children[i], next_state, map, num_buckets, p1_reach, p2_reach, child_util, precomputed_masks);
 			float p_card = node->chance_weights[i] / 45.0f; //approx unseen cards
+			#pragma omp parallel for simd if(num_buckets > 500)
 			for (int b = 0; b < num_buckets; b++)
 				out_util[b] += child_util[b] * p_card;
 		}
@@ -69,6 +100,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 		memcpy(next_p2_reach, p2_reach, num_buckets * sizeof(float));
 
 		//update reach prob for each player
+		#pragma omp parallel for simd if(num_buckets > 500)
 		for (int b = 0; b < num_buckets; b++) {
 			int idx = (a * num_buckets) + b;
 			if (active == 0)
@@ -83,6 +115,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 		walk_tree(node->children[a], next_state, map, num_buckets, next_p1_reach, next_p2_reach, child_util, precomputed_masks);
 
 		//returned utility perspective of child nodes active palye,r we must swap it
+		#pragma omp parallel for simd if(num_buckets > 500)
 		for (int b = 0; b < num_buckets; b++) {
 			child_util[b] = -child_util[b];
 			out_util[b]  += strategy[(a * num_buckets) + b] * child_util[b];
@@ -93,18 +126,21 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 	}
 
 	//regret updates
-	for (int a = 0; a < num_actions; a++) {
-		for (int b = 0; b < num_buckets; b++) {
-			int idx = (a * num_buckets) + b;
-			//cfr "how much ev did i get for this vs average ev"
-			float regret = action_utils[(a * num_buckets) + b] - out_util[b];
-			//weight the regret by prob that the opponent will reach this node
-			float opp_reach = (active == 0) ? p2_reach[b] : p1_reach[b];
+	#pragma omp parallel if(num_buckets > 500)
+	{
+		for (int a = 0; a < num_actions; a++) {
+			#pragma omp for simd
+			for (int b = 0; b < num_buckets; b++) {
+				int idx = (a * num_buckets) + b;
+				//cfr "how much ev did i get for this vs average ev"
+				float regret = action_utils[idx] - out_util[b];
+				//weight the regret by prob that the opponent will reach this node
+				float opp_reach = (active == 0) ? p2_reach[b] : p1_reach[b];
+				float my_reach  = (active == 0) ? p2_reach[b] : p1_reach[b];
 
-			node->regret_sum[idx] += regret * opp_reach;
-			//add to strategy sum
-			node->strategy_sum[idx] += strategy[idx] * ((active == 0) ? p1_reach[b] : p2_reach[b]);
-
+				node->regret_sum[idx] += regret * opp_reach;
+				node->strategy_sum[idx] += strategy[idx] * my_reach;
+			}
 		}
 	}
 

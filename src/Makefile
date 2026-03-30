@@ -1,8 +1,8 @@
-CC = clang
-CXX = clang++
-CFLAGS = -O3 -Wall
-CXXFLAGS = -O3 -std=c++17 -I./omp
-LDFLAGS = 
+CC = gcc
+CXX = g++
+CFLAGS = -Wall -Wextra -O3 -march=native -fopenmp
+CXXFLAGS = -O3 -std=c++17 -I./omp -fopenmp
+LDFLAGS = -fopenmp
 
 # All C object files needed
 C_OBJS = main2.o parse.o tree.o indexer.o showdown.o cfr.o
@@ -24,4 +24,4 @@ $(TARGET): $(C_OBJS) $(CXX_OBJS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o omp/omp/*.o $(TARGET)
+	rm -f *.o omp/*.o $(TARGET)
