@@ -9,20 +9,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+// --- DECLARE THE EXPLOITABILITY FUNCTION ---
+float calc_exploitability(PublicNode* root, GameState initial_state, IsoMap* map, int num_buckets, float* p1_starting_range, float* p2_starting_range);
+
 // Helper function to traverse the tree and count the total nodes
 size_t count_nodes(PublicNode* node) {
     if (node == NULL) return 0;
-
-    size_t total = 1; // Count this node
-
-    if (node->type == NODE_TERMINAL) {
-        return total;
-    }
-
+    size_t total = 1; 
+    if (node->type == NODE_TERMINAL) return total;
     for (int i = 0; i < node->num_children; i++) {
         total += count_nodes(node->children[i]);
     }
-
     return total;
 }
 
@@ -64,7 +61,6 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
 
     printf("\n--- PLAYER %d STRATEGY GRID (Dominant Action) ---\n", state.active_player + 1);
 
-    // 1. Define a generous color palette for up to 8 actions
     const char* colors[] = {
         "\x1b[36m",   // Cyan (Fold)
         "\x1b[32m",   // Green (Check/Call)
@@ -77,7 +73,6 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
     };
     const char* reset = "\x1b[0m";
 
-    // 2. Dynamically print the legend based on the exact legal actions
     printf("Legend: ");
     for (int i = 0; i < num_actions; i++) {
         int color_idx = (i < 8) ? i : 7;
@@ -85,17 +80,14 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
         else if (legal_actions[i] == 0) printf("%sCheck/Call%s | ", colors[color_idx], reset);
         else printf("%sBet %d%s | ", colors[color_idx], legal_actions[i], reset);
     }
-    printf("\b\b  \n\n"); // Clean up the trailing pipe
+    printf("\b\b  \n\n"); 
 
     float grid_probs[13][13][8] = {0}; 
     int grid_counts[13][13] = {0};
 
-    // 3. Accumulate probabilities ONLY for hands that are physically possible AND in your range
     for (int combo = 0; combo < 1326; combo++) {
         int bucket = map->combo_to_bucket[combo];
-        if (bucket == -1) continue; // Physically dead card
-
-        // --- THE FIX: Ignore hands that have been folded (Strategic Dead Cards) ---
+        if (bucket == -1) continue; 
         if (current_reach[bucket] < 0.0001f) continue; 
 
         float sum = 0.0f;
@@ -104,7 +96,6 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
         }
         if (sum == 0.0f) continue; 
 
-        // Reconstruct the cards
         int c1 = 0, c2 = 0, counter = 0;
         for (int i = 0; i < 51; i++) {
             for (int j = i + 1; j < 52; j++) {
@@ -134,7 +125,6 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
         }
     }
 
-    // 4. Print the Grid
     const char rank_chars[] = "AKQJT98765432";
     printf("    ");
     for (int i = 0; i < 13; i++) printf("  %c  ", rank_chars[i]);
@@ -143,9 +133,7 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
     for (int r = 0; r < 13; r++) {
         printf("%c | ", rank_chars[r]);
         for (int c = 0; c < 13; c++) {
-            
             if (grid_counts[r][c] == 0) {
-                // Hand is completely folded out or physically dead
                 printf("  -  ");
             } else {
                 int dom_a = 0;
@@ -157,10 +145,8 @@ void print_root_strategy(PublicNode* root, GameState state, IsoMap* map, int num
                         dom_a = a;
                     }
                 }
-                
                 float print_pct = max_p * 100.0f;
                 int color_idx = (dom_a < 8) ? dom_a : 7;
-                
                 printf("%s%3.0f%%%s ", colors[color_idx], print_pct, reset);
             }
         }
@@ -178,7 +164,7 @@ void print_live_reach_grid(float* reach, IsoMap* map) {
 
     for (int combo = 0; combo < 1326; combo++) {
         int bucket = map->combo_to_bucket[combo];
-        if (bucket == -1) continue; // Skip hands blocked by the board
+        if (bucket == -1) continue; 
 
         int c1 = 0, c2 = 0, counter = 0;
         for (int i = 0; i < 51; i++) {
@@ -198,9 +184,9 @@ void print_live_reach_grid(float* reach, IsoMap* map) {
         int col = 12 - rank_low;
 
         int grid_r, grid_c;
-        if (s1 == s2) { grid_r = row; grid_c = col; }        // Suited: Top-Right
-        else if (r1 == r2) { grid_r = row; grid_c = col; }   // Pair: Diagonal
-        else { grid_r = col; grid_c = row; }                 // Offsuit: Bottom-Left
+        if (s1 == s2) { grid_r = row; grid_c = col; }        
+        else if (r1 == r2) { grid_r = row; grid_c = col; }   
+        else { grid_r = col; grid_c = row; }                 
 
         grid_weights[grid_r][grid_c] += reach[bucket];
         grid_counts[grid_r][grid_c]++;
@@ -218,7 +204,6 @@ void print_live_reach_grid(float* reach, IsoMap* map) {
                 printf("  -  ");
             } else {
                 float avg_weight = grid_weights[r][c] / (float)grid_counts[r][c];
-                // If a hand is completely folded out or blocked, print a dash
                 if (avg_weight < 0.005f) {
                      printf("  -  ");
                 } else {
@@ -231,29 +216,21 @@ void print_live_reach_grid(float* reach, IsoMap* map) {
     printf("\n");
 }
 
-
-// (Make sure to paste the sb_hu_json string I gave you earlier right up here, 
-// along with your BTN json string)
-extern const char* sb_hu_json; // Replace with actual string if not in a header
-extern const char* btn_json;   // Replace with actual string if not in a header
-
-// Finds the index of a specific action so we can traverse down the tree
 int get_action_index(GameState state, int target_action) {
     int legal_actions[8];
-    int num_actions = generate_bet_sizes(&state, legal_actions); // Assuming this returns the count
+    int num_actions = generate_bet_sizes(&state, legal_actions); 
     
     for (int i = 0; i < num_actions; i++) {
         if (legal_actions[i] == target_action) {
             return i;
         }
     }
-    return -1; // Action not found
+    return -1; 
 }
 
 int main(int argc, char** argv) {
     printf("Initializing TurboFire Engine...\n\n");
 
-    // 1. Check CLI Arguments
     if (argc < 5) {
         printf("ERROR: Missing arguments.\n");
         printf("Usage:   ./turbofire \"<board>\" <pot> <p1_stack> <p2_stack>\n");
@@ -261,7 +238,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // 2. Parse the CLI arguments
     const char* board_str = argv[1];
     int pot_size = atoi(argv[2]);
     int p1_stack = atoi(argv[3]);
@@ -274,24 +250,20 @@ int main(int argc, char** argv) {
     printf("P2 Stack: %d\n", p2_stack);
     printf("--------------------------------\n\n");
 
-    // 3. Define the Flop dynamically from the string
     uint64_t flop_board = parse_board_string(board_str);
 
-    // 4. Build the Isomorphism Map
     printf("Building Flop Isomorphism Map...\n");
     IsoMap flop_map;
     build_isomorphism_map(flop_board, &flop_map);
     printf("-> Unique Buckets: %d\n", flop_map.num_unique_buckets);
     printf("-> SIMD Padded Buckets: %d\n\n", flop_map.padded_buckets);
 
-    // 5. Initialize the Memory Arena
     printf("Allocating Memory Arena...\n");
     Arena arena;
     size_t arena_size = 8ULL * 1024 * 1024 * 1024; // 8 Gigabytes
     arena_init(&arena, arena_size);
     printf("-> Arena Initialized.\n\n");
 
-    // 6. Setup the Initial GameState
     GameState root_state = {0};
     root_state.board = flop_board;
     root_state.pot = pot_size;                  
@@ -305,11 +277,9 @@ int main(int argc, char** argv) {
     root_state.num_actions_this_street = 0;
     root_state.last_action_was_fold = 0;
 
-    // 7. Build the Game Tree
     printf("Building Public State Tree (This might take a second)...\n");
     PublicNode* root = build_public_tree(&arena, root_state, flop_map.padded_buckets);
 
-    // 8. Verify and Count
     printf("Traversing tree to count nodes...\n");
     size_t total_nodes = count_nodes(root);
     
@@ -321,11 +291,9 @@ int main(int argc, char** argv) {
     printf("Arena Memory Used: %.2f MB\n", mb_used);
     printf("========================================\n\n");
 
-    // --- OMPEVAL INITIALIZATION ---
     printf("Initializing OMPEval tables...\n");
     init_evaluator();
 
-    // --- LOAD PREFLOP RANGES ---
     printf("Loading Preflop Ranges...\n");
     
     PlayerRange p1_raw_range = {0};
@@ -340,7 +308,7 @@ int main(int argc, char** argv) {
     convert_range_to_buckets(&p1_raw_range, &flop_map, p1_starting_reach);
     convert_range_to_buckets(&p2_raw_range, &flop_map, p2_starting_reach);
 
-// --- SOLVER EXECUTION (FLOP) ---
+    // --- SOLVER EXECUTION (FLOP) ---
     printf("Starting DCFR Solver...\n");
     int num_iterations = 50; 
     
@@ -354,9 +322,11 @@ int main(int argc, char** argv) {
             clock_t chunk_end_time = clock();
             double chunk_time = (double)(chunk_end_time - chunk_start_time) / CLOCKS_PER_SEC;
             
-            printf("Completed %d / %d iterations... [%.2f seconds]\n", i + 1, num_iterations, chunk_time);
+            // --- NEW: CALC EXPLOITABILITY FOR FLOP ---
+            float exp_chips = calc_exploitability(root, root_state, &flop_map, flop_map.padded_buckets, p1_starting_reach, p2_starting_reach);
             
-            // Reset the chunk timer for the next batch
+            printf("Completed %d / %d iterations... [%.2f seconds] | Exploitability: %.4f chips\n", i + 1, num_iterations, chunk_time, exp_chips);
+            
             chunk_start_time = clock(); 
         }
     }
@@ -393,7 +363,7 @@ int main(int argc, char** argv) {
             break;
         }
 
-// --- THE UNIFIED SUBGAME BRIDGE (TURN & RIVER) ---
+        // --- THE UNIFIED SUBGAME BRIDGE (TURN & RIVER) ---
         if (current_node->type == NODE_CHANCE) {
             int next_street = current_state.street + 1;
             
@@ -403,7 +373,6 @@ int main(int argc, char** argv) {
             printf("Pot: %d\n", current_state.pot);
             printf("========================================\n\n");
 
-            // A. Ask for the correct street's card
             char next_card_input[8];
             if (current_state.street == 0) printf("Enter the Turn card (e.g., '4h'): ");
             if (current_state.street == 1) printf("Enter the River card (e.g., 'Kd'): ");
@@ -421,7 +390,6 @@ int main(int argc, char** argv) {
             current_state.num_actions_this_street = 0;
             current_state.active_player = 0; 
 
-            // 1. Un-bucket using the old street's map
             float raw_p1_combos[1326] = {0};
             float raw_p2_combos[1326] = {0};
             for (int i = 0; i < 1326; i++) {
@@ -432,13 +400,11 @@ int main(int argc, char** argv) {
                 }
             }
 
-            // 2. Purge ghost data and build the new street's map
             printf("\nBuilding %s Isomorphism Map...\n", (next_street == 1) ? "Turn" : "River");
             memset(flop_map.combo_to_bucket, -1, 1326 * sizeof(int));
             build_isomorphism_map(current_state.board, &flop_map); 
             printf("-> %s Buckets: %d\n", (next_street == 1) ? "Turn" : "River", flop_map.padded_buckets);
 
-            // 3. Re-bucket and average isomorphic collisions
             float* new_p1_reach = (float*)calloc(flop_map.padded_buckets, sizeof(float));
             float* new_p2_reach = (float*)calloc(flop_map.padded_buckets, sizeof(float));
             int* bucket_counts = (int*)calloc(flop_map.padded_buckets, sizeof(int));
@@ -465,30 +431,33 @@ int main(int argc, char** argv) {
             live_p1_reach = new_p1_reach;
             live_p2_reach = new_p2_reach;
 
-            // 4. Reset Memory and Build the new Tree
             printf("Resetting Memory Arena...\n");
             arena_reset(&arena);
 
             printf("Building %s Tree...\n", (next_street == 1) ? "Turn" : "River");
             current_node = build_public_tree(&arena, current_state, flop_map.padded_buckets);
 
-            // 5. Solve Subgame (River needs fewer iterations because it's so small)
+            // --- SUBGAME EXECUTION & EXPLOITABILITY GRADING ---
             printf("Starting %s CFR Solver...\n", (next_street == 1) ? "Turn" : "River");
             int subgame_iterations = (next_street == 1) ? 600 : 200; 
+            
             for (int i = 0; i < subgame_iterations; i++) {
                 do_cfr_iteration(current_node, current_state, &flop_map, flop_map.padded_buckets, live_p1_reach, live_p2_reach);
-                if ((i + 1) % 100 == 0) printf("Completed %d / %d iterations...\n", i + 1, subgame_iterations);
+                
+                // NEW: Grade the subgame every 100 iterations
+                if ((i + 1) % 100 == 0) {
+                    float subgame_exp = calc_exploitability(current_node, current_state, &flop_map, flop_map.padded_buckets, live_p1_reach, live_p2_reach);
+                    printf("Completed %d / %d iterations... | Exploitability: %.4f chips\n", i + 1, subgame_iterations, subgame_exp);
+                }
             }
             
             printf("\n[ %s SOLVE COMPLETE ]\n", (next_street == 1) ? "TURN" : "RIVER");
             continue; 
         }
 
-
         printf("\n--- CURRENT NODE STRATEGY (Player %d) ---\n", current_state.active_player + 1);
         printf("Pot: %d | P1 Stack: %d | P2 Stack: %d\n", current_state.pot, current_state.p1_stack, current_state.p2_stack);
 
-	// Pass the state and the correct live range so it can filter out folded hands!
         float* active_reach = (current_state.active_player == 0) ? live_p1_reach : live_p2_reach;
         print_root_strategy(current_node, current_state, &flop_map, flop_map.padded_buckets, active_reach);
 
@@ -503,7 +472,6 @@ int main(int argc, char** argv) {
         }
         printf("\n");
 
-        // --- RANGE VISUALIZER COMMANDS INJECTED HERE ---
         printf("Enter action amount to step forward ('r1' for P1 Range, 'r2' for P2 Range, 'q' to quit): ");
         
         if (fgets(input, sizeof(input), stdin) == NULL) break;
@@ -519,7 +487,6 @@ int main(int argc, char** argv) {
         }
 
         int chosen_action = atoi(input);
-
         int child_idx = get_action_index(current_state, chosen_action);
         
         if (child_idx == -1) {
