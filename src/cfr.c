@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 //from regret sums
 void calc_strategy(float* regret_sum, float* strategy, int num_actions, int num_buckets) {
@@ -139,7 +140,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 				float regret = action_utils[idx] - out_util[b];
 				//weight the regret by prob that the opponent will reach this node
 				float opp_reach = (active == 0) ? p2_reach[b] : p1_reach[b];
-				float my_reach  = (active == 1) ? p1_reach[b] : p2_reach[b];
+				float my_reach  = (active == 0) ? p1_reach[b] : p2_reach[b];
 
 				node->regret_sum[idx] += regret * opp_reach;
 				node->strategy_sum[idx] += strategy[idx] * my_reach;
@@ -299,6 +300,30 @@ void do_cfr_iteration(PublicNode* root, GameState initial_state, IsoMap* map, in
 	free(p2_reach);
 	free(root_util);
 	free(precomputed_masks);
+}
+
+void discount_tree(PublicNode* node, int num_buckets, int t, float alpha, float beta, float gamma) {
+	if (node->type == NODE_TERMINAL)
+		return;
+
+	if (node->type == NODE_ACTION) {
+		float pos_disc = powf((float)t, alpha) / (powf((float)t, alpha) + 1.0f);
+		float neg_disc = powf((float)t, beta)  / (powf((float)t, beta)  + 1.0f);
+		float strat_disc = powf((float)t / ((float)t + 1.0f), gamma);
+
+		int total = node->num_children * num_buckets;
+		#pragma omp parallel for simd if(total > 500)
+		for (int i = 0; i < total; i++) {
+			if (node->regret_sum[i] > 0.0f)
+				node->regret_sum[i] *= pos_disc;
+			else
+				node->regret_sum[i] *= neg_disc;
+			node->strategy_sum[i] *= strat_disc;
+		}
+	}
+
+	for (int i = 0; i < node->num_children; i++)
+		discount_tree(node->children[i], num_buckets, t, alpha, beta, gamma);
 }
 
 //extract narrowed range after action of node

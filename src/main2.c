@@ -317,6 +317,7 @@ int main(int argc, char** argv) {
 
     for (int i = 0; i < num_iterations; i++) {
         do_cfr_iteration(root, root_state, &flop_map, flop_map.padded_buckets, p1_starting_reach, p2_starting_reach);
+        discount_tree(root, flop_map.padded_buckets, i + 1, 1.5f, 0.5f, 2.0f);
         
         if ((i + 1) % 10 == 0) {
             clock_t chunk_end_time = clock();
@@ -443,8 +444,8 @@ int main(int argc, char** argv) {
             
             for (int i = 0; i < subgame_iterations; i++) {
                 do_cfr_iteration(current_node, current_state, &flop_map, flop_map.padded_buckets, live_p1_reach, live_p2_reach);
+                discount_tree(current_node, flop_map.padded_buckets, i + 1, 1.5f, 0.5f, 2.0f);
                 
-                // NEW: Grade the subgame every 100 iterations
                 if ((i + 1) % 100 == 0) {
                     float subgame_exp = calc_exploitability(current_node, current_state, &flop_map, flop_map.padded_buckets, live_p1_reach, live_p2_reach);
                     printf("Completed %d / %d iterations... | Exploitability: %.4f chips\n", i + 1, subgame_iterations, subgame_exp);
