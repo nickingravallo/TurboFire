@@ -150,7 +150,7 @@ GameState apply_bet(GameState current_state, int action_amount) {
 		next_state.p2_stack  -= chips_to_add;
 	}
 
-	next_state.pot += action_amount;
+	next_state.pot += chips_to_add;
 
 	//check for raise
 	if (next_state.p1_commit != next_state.p2_commit && action_amount > 0)

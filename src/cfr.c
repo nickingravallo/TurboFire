@@ -65,11 +65,14 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 	if (node->type == NODE_CHANCE) {
 		memset(out_util, 0, num_buckets * sizeof(float));
 		float* child_util = (float*) malloc(num_buckets * sizeof(float));
+		float total_weight = 0.0f;
+		for (int i = 0; i < node->num_children; i++)
+			total_weight += node->chance_weights[i];
 
 		for (int i = 0; i < node->num_children; i++) {
 			GameState next_state = apply_deal(state, node->dealt_cards[i]);
 			walk_tree(node->children[i], next_state, map, num_buckets, p1_reach, p2_reach, child_util, precomputed_masks);
-			float p_card = node->chance_weights[i] / 45.0f; //approx unseen cards
+			float p_card = (total_weight > 0.0f) ? (node->chance_weights[i] / total_weight) : 0.0f;
 			#pragma omp parallel for simd if(num_buckets > 500)
 			for (int b = 0; b < num_buckets; b++)
 				out_util[b] += child_util[b] * p_card;
@@ -136,7 +139,7 @@ void walk_tree(PublicNode* node, GameState state, IsoMap* map, int num_buckets, 
 				float regret = action_utils[idx] - out_util[b];
 				//weight the regret by prob that the opponent will reach this node
 				float opp_reach = (active == 0) ? p2_reach[b] : p1_reach[b];
-				float my_reach  = (active == 0) ? p2_reach[b] : p1_reach[b];
+				float my_reach  = (active == 1) ? p1_reach[b] : p2_reach[b];
 
 				node->regret_sum[idx] += regret * opp_reach;
 				node->strategy_sum[idx] += strategy[idx] * my_reach;
@@ -158,11 +161,14 @@ void walk_br_tree(PublicNode* node, GameState state, IsoMap* map, int num_bucket
 	if (node->type == NODE_CHANCE) {
 		memset(out_util, 0, num_buckets * sizeof(float));
 		float* child_util = (float*) malloc(num_buckets * sizeof(float));
+		float total_weight = 0.0f;
+		for (int i = 0; i < node->num_children; i++)
+			total_weight += node->chance_weights[i];
 
 		for (int i = 0; i < node->num_children; i++) {
 			GameState next_state = apply_deal(state, node->dealt_cards[i]);
 			walk_br_tree(node->children[i], next_state, map, num_buckets, exploiter, p1_reach, p2_reach, child_util, precomputed_masks);
-			float p_card = node->chance_weights[i] / 45.0f; //approx unseen cards
+			float p_card = (total_weight > 0.0f) ? (node->chance_weights[i] / total_weight) : 0.0f;
 			#pragma omp parallel for simd if(num_buckets > 500)
 			for (int b = 0; b < num_buckets; b++)
 				out_util[b] += child_util[b] * p_card;

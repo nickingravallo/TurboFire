@@ -47,7 +47,7 @@ void convert_range_to_buckets(PlayerRange* range, IsoMap* map, float* out_reach_
 
         for (int i = 0; i < range->num_combos; i++) {
             if (range->combos[i].mask == combo_mask) {
-                out_reach_array[target_bucket] = range->combos[i].weight;
+                out_reach_array[target_bucket] += range->combos[i].weight;
                 break;
             }
         }
