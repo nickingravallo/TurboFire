@@ -5,7 +5,7 @@ CXXFLAGS = -O3 -std=c++17 -I./omp -fopenmp
 LDFLAGS = -fopenmp
 
 # All C object files needed
-C_OBJS = main2.o parse.o tree.o indexer.o showdown.o cfr.o
+C_OBJS = main.o parse.o
 
 # All C++ object files needed
 CXX_OBJS = evaluator.o omp/HandEvaluator.o
