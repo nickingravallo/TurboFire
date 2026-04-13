@@ -81,15 +81,16 @@ void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int
 	}
 }
 
-void action_node(PublicNode* node, GameState *state, ) {
+void action_node(PublicNode* node, GameState *state, int num_actions, int num_buckets) {
 	int8_t legal_actions[8]; //8b align 
 	int action_count = get_legal_actions(state, legal_actions);
 
 	float* strategy = (float*)malloc(num_actions * num_buckets * sizeof(float)); 
 	float* act_util = (float*)malloc(num_actions * num_buckets * sizeof(float));
 
+	calculate_strategy(node->regret_sum, strategy, num_actions, num_buckets);
+
 	
-	//calc_strat
 }
 void dcfr(PublicNode* node, GameState* state) {
 	if (node->type == NODE_ACTION) {
