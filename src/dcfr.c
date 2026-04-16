@@ -1,4 +1,3 @@
-
 #define FOLD  -1
 #define PASS  0
 #define B10   1
@@ -87,19 +86,57 @@ void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int
 GameState apply_bet(GameState current_state, int action) {
 	GameState = next_state = current_state;
 	next_state.num_actions_this_street += 1;
+	int bet_size = 0;
 
 	switch (action) {
 		case FOLD:
 			next_state.last_action_was_fold = 1;
 			return next_state;
 		case PASS:
-			int bet = current_state.p2_commit - current_state.p1_commit;
+			bet_size = current_state.p2_commit - current_state.p1_commit;
 			int (current_state.active_player == 1)
-				bet = -bet; 
+				bet_size = -bet_size; 
+		case B10:
+			bet_size = current_state.pot * 0.1;
+			break:
+		case B25:
+			bet_size = current_state.pot * 0.25;
+			break;
+		case B52:
+			bet_size = current_state.pot * 0.52;
+			break;
+		case B100:
+			bet_size = current_state.pot;
+			break;
+		case B123:
+			bet_size = current_state.pot * 1.23;
+			break;
+		case R3x:
+			int commit = current_state.p2_commit - current_state.p1_commit;
+			int (current_state.active_player == 1)
+				commit = -commit; 
 
-			if (bet > 0)
-				next_state.pot += bet;
+			bet_size = commit * 3;
+			next_state.raises_this_street += 1;
+			break;
+		default:
+			printf("ERR: BAD ACTION IN APPLY_BET %d\n", action);
 	}
+	
+	if (next_state.active_player == 0) {
+		next_state.p1_commit += bet_size;
+		next_state.p1_stack  -= bet_size;
+	}
+	else {
+		next_state.p2_commit += bet_size;
+		next_state.p2_stack  -= bet_size;
+	}
+
+	next_state.pot += bet_size;
+
+	next_state.active_player = 1 - next_state.active_player;
+	
+	return next_state;
 }
 
 void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
@@ -108,7 +145,7 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 	int action_count = get_legal_actions(state, legal_actions);
 
 	float* strategy = (float*)malloc(num_actions * num_combos * sizeof(float)); 
-	float* act_util = (float*)malloc(num_actions * num_combos * sizeof(float));
+	float* action_expected_util = (float*)malloc(num_actions * num_combos * sizeof(float));
 
 	calculate_strategy(node->regret_sum, strategy, num_actions, num_combos);
 
@@ -133,6 +170,9 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 		}
 
 		GameState next_state = apply_bet(state, legal_actions[action]);
+		
+		float* child_expected_util = &action_expected_util[a * num_combos];
+		walk_tree(node->children[action], next_state, num_combos, next_p1_reach, next_p2_reach, child_expected_util);
 	}
 	
 }
