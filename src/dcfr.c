@@ -144,10 +144,10 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 	uint8_t active = node->active_player;
 	int action_count = get_legal_actions(state, legal_actions);
 
-	float* strategy = (float*)malloc(num_actions * num_combos * sizeof(float)); 
-	float* action_expected_util = (float*)malloc(num_actions * num_combos * sizeof(float));
+	float* strategy = (float*)malloc(action_count * num_combos * sizeof(float)); 
+	float* action_expected_util = (float*)malloc(action_count * num_combos * sizeof(float));
 
-	calculate_strategy(node->regret_sum, strategy, num_actions, num_combos);
+	calculate_strategy(node->regret_sum, strategy, action_count, num_combos);
 
 	for (int action = 0; i < action_count; i++) {
 		float* next_p1_reach = (float*) malloc(num_combos*sizeof(float));
@@ -166,16 +166,57 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 			if (active_player == 0)
 				next_p1_reach[b] *= strategy[idx];
 			else
-				next_p2_reach[b] *= strategy[idx]
+				next_p2_reach[b] *= strategy[idx];
 		}
 
 		GameState next_state = apply_bet(state, legal_actions[action]);
 		
-		float* child_expected_util = &action_expected_util[a * num_combos];
+		//we calculate utility on a per-action basis, per node
+		float* child_expected_util = &action_expected_util[action * num_combos];
 		walk_tree(node->children[action], next_state, num_combos, next_p1_reach, next_p2_reach, child_expected_util);
+
+		/*
+		 * update utility, the child node is from perspective of next player so we must reverse it
+		 * expected_util[combo] += strategy[action][combo] * child_expected_util[combo]	
+		 * we are getting the expected_util by the EV of the next node for our selected combos for the node (on a per action basis)
+		 * this is converted into the perspective of our node
+		 * we multiply it by strategy since we're choosing this action with this combo 100% of the time, only a certain broken down percentage
+		*/
+		for (int combo = 0; combo < num_combos; combo++) {
+			child_expected_util[combo] = -child_expected_util[combo];
+			expected_util[combo] += strategy[(action * num_combos) + combo] * child_expected_util[combo];
+		}
+
+		free(next_p1_reach);
+		free(next_p2_reach);
 	}
 	
-}
+	/*
+	 * Update Regrets
+	 * regret = action EV for combo - average EV for combo
+	 * we update reaches since we're not hitting every combo 100% of the time
+	 * We update regret based on the chance the opponent will take an combo of an action
+	 * We update strategy based on the chance we'll perform a specific combo of an action
+	 */
+	for (int action = 0; action < action_count, action++) {
+		for (int combo = 0; combo < num_combos; combo++) {
+			int id = (action * num_combos) + combo;
+			
+			float regret = action_expected_util[id] - expected_util[combo];
+
+			float opp_reach = (active == 0) ? p2_reach[combo] : p1_reach[combo];
+			float my_reach  = (active == 0) ? p1_reach[combo] : p2_reach[combo];
+
+			node->regret_sum[id] += regret * opp_reach;
+			node->strategy_sum[id] += strategy[id] * my_reach;
+
+		}
+	}
+
+	free(strategy);
+	free(action_utils);
+}	
+
 void dcfr(PublicNode* node, GameState* state) {
 	if (node->type == NODE_ACTION) {
 		action_node(node, state);
