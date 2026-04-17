@@ -217,9 +217,62 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 	free(action_utils);
 }	
 
-void dcfr(PublicNode* node, GameState* state) {
+
+void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+	//we're finally setting the EV
+	memset(out_util, 0, num_buckets * sizeof(float));	
+
+	//It's really simple if we have a fold, we're just counting commits
+	if (state.last_action_was_fold) {
+		for (int combo = 0; combo < num_combos; combo++) {
+			if (state.active_player == 0)
+				expected_util[combo] = -(float)state.p1_commit;
+			else
+				expected_util[combo] =  -(float)state.p2_commit;
+		}
+		return;
+	}
+
+	int combo_scores[1326] = {0};
+	for (int combo = 0; combo < num_combos; combo++) {
+		//TODO
+		//evalaute_board()
+		//get hand mask
+	}
+
+	for (int p1c = 0; p1c < num_combos; p1c++) {
+		if (p1_reach[p1c] == 0.0f)
+			continue;
+
+		float ev = 0.0f;
+
+		for (int p2c = 0; p2c < num_combos; p2c++) {
+			if (p2_reach[p2c] == 0.0f)
+				continue;
+			int p1_score = combo_scores[p1c];
+			int p2_score = combo_scores[p2c];
+
+			if (p1_score > p2_score)
+				ev += p2_reach[p2c] * (float)state.p2_commit;
+			else if (p2_score > p1_score)
+				ev -= p2_reach[p2c] * (float)state.p1_commit;
+		}
+
+		if (state.active_player == 0)
+			expected_util[p1c] = ev;
+		else
+			expected_util[p2c] = ev;
+	}
+}
+
+
+
+void dcfr(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	if (node->type == NODE_ACTION) {
-		action_node(node, state);
+		action_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
+	}
+	else if (node->type == NODE_TERMINAL) {
+		terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
 	}
 }
 
