@@ -15,6 +15,30 @@
 
 #include "parse.h"
 
+void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_starting_range, float* p2_starting_range, int iteration) {
+	float* p1_reach  = (float*)malloc(num_combos * sizeof(float));
+	float* p2_reach  = (float*)malloc(num_combos * sizeof(float));
+	float* root_util = (float*)malloc(num_combos * sizeof(float));
+
+	for (int i = 0; i < num_combos; i++) {
+		p1_reach[i] = p1_starting_range[i];
+		p2_reach[i] = p2_starting_range[i];
+		root_util[i] = 0.0f;
+	}
+
+	//alpha = 1.5f;
+	//beta =  0.5f;
+	//gamma = 2.0f;
+	//this is recommended from the DCFR (2019) paper
+	if (iteration > 1)
+		discount_tree(root, num_combos, t, 1.5f, 0.5f, 2.0f);
+	dcfr(root, initial_state, num_combos, p1_reach, p2_reach, root_utils);
+
+	free(p1_reach);
+	free(p2_reach);
+	free(root_util);
+}
+
 int get_legal_actions(GameState* state, int8_t* out_actions) {
 	uint8_t act = 0;
 	if (state->active_player == P1) {
@@ -260,7 +284,7 @@ void chance_node(PublicNode* node, GameState* state, int num_combos, float* p1_r
 
 void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	//we're finally setting the EV
-	memset(out_util, 0, num_buckets * sizeof(float));	
+	memset(out_util, 0, num_combos * sizeof(float));	
 
 	//It's really simple if we have a fold, we're just counting commits
 	if (state.last_action_was_fold) {
@@ -315,3 +339,26 @@ void dcfr(PublicNode* node, GameState *state, int num_combos, float* p1_reach, f
 		terminal_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
 }
 
+void discount_tree(PublicNode* node, int num_combos, int t, float alpha, float beta, float gamma) {
+	if (node->type == NODE_TERMINAL)
+		return;
+
+	if (node->type == NODE_ACTION) {
+		float pos_disc = powf((float)t, alpha) / (powf((float)t, alpha) + 1.0f);
+		float neg_disc = powf((float)t, beta)  / (powf((float)t, beta)  + 1.0f);
+		float strat_disc = powf((float)t / ((float)t + 1.0f), gamma);
+
+		int total = node->num_children * num_combos;
+		#pragma omp parallel for simd if(total > 500)
+		for (int i = 0; i < total; i++) {
+			if (node->regret_sum[i] > 0.0f)
+				node->regret_sum[i] *= pos_disc;
+			else
+				node->regret_sum[i] *= neg_disc;
+			node->strategy_sum[i] *= strat_disc;
+		}
+	}
+
+	for (int i = 0; i < node->num_children; i++)
+		discount_tree(node->children[i], num_combos, t, alpha, beta, gamma);
+}
