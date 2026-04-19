@@ -1,19 +1,4 @@
-#define FOLD  -1
-#define PASS  0
-#define B10   1
-#define B25   2
-#define B52   3
-#define B100  4
-#define B123  5
-
-#define R3x   7 
-
-#define P1 0
-#define P2 1
-
-#include <stdint.h>
-
-#include "parse.h"
+#include "dcfr.h"
 
 void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_starting_range, float* p2_starting_range, int iteration) {
 	float* p1_reach  = (float*)malloc(num_combos * sizeof(float));
@@ -31,26 +16,26 @@ void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_
 	//gamma = 2.0f;
 	//this is recommended from the DCFR (2019) paper
 	if (iteration > 1)
-		discount_tree(root, num_combos, t, 1.5f, 0.5f, 2.0f);
-	dcfr(root, initial_state, num_combos, p1_reach, p2_reach, root_utils);
+		discount_tree(root, num_combos, iteration, 1.5f, 0.5f, 2.0f);
+	dcfr(root, initial_state, num_combos, p1_reach, p2_reach, root_util);
 
 	free(p1_reach);
 	free(p2_reach);
 	free(root_util);
 }
 
-int get_legal_actions(GameState* state, int8_t* out_actions) {
+int get_legal_actions(GameState state, int8_t* out_actions) {
 	uint8_t act = 0;
-	if (state->active_player == P1) {
-		if (state->num_actions_this_street) //previous actions, we're now allowed to fold
+	if (state.active_player == P1) {
+		if (state.num_actions_this_street) //previous actions, we're now allowed to fold
 			out_actions[act++] = FOLD;
 		out_actions[act++] = PASS; //chk / call	
 		
 		//we can only raise after IP has performed
-		if (state->num_actions_this_street     && 
-		    state->num_actions_this_street % 2 &&
-		    state->raises_this_street < 3) {
-			out_actions[act++] = B3x;
+		if (state.num_actions_this_street     && 
+		    state.num_actions_this_street % 2 &&
+		    state.raises_this_street < 3) {
+			out_actions[act++] = R3x;
 			//will add more...
 		}
 		else {
@@ -62,11 +47,11 @@ int get_legal_actions(GameState* state, int8_t* out_actions) {
 		}
 	}
 	else { //P2
-		if (state->raises_this_street)//vs bet, not check
+		if (state.raises_this_street)//vs bet, not check
 			out_actions[act++] = FOLD;
 		out_actions[act++] = PASS;
-		if (state->raises_this_street && state->raises_this_street < 3) //keep raise in order
-			out_actions[act++] R3x;
+		if (state.raises_this_street && state.raises_this_street < 3) //keep raise in order
+			out_actions[act++] = R3x;
 		else {
 			out_actions[act++] = B10;
 			out_actions[act++] = B25;
@@ -77,6 +62,8 @@ int get_legal_actions(GameState* state, int8_t* out_actions) {
 		}
 		
 	}
+
+	return act;
 }
 
 void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int num_combos) {
@@ -85,23 +72,23 @@ void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int
 	 * We're getting positive regret_sum and prepping them for action weighting 
 	 */
 	for (int a = 0; a < num_actions; a++) {
-		for (int b = 0 ; b < num_combos; b++) {
-			int id = (a * num_combos) + b;
+		for (int combo = 0 ; combo < num_combos; combo++) {
+			int id = (a * num_combos) + combo;
 			float r = regret_sum[id];
 			strategy[id] = r <= 0.0f ? 0 : r;
 		}
 	}
 
 	//per combo, for each action, coming up with a strategy (0.0-1.0) based on normalizing the regrets for a specific combo
-	for (int b = 0; b < num_combos; b++) {
+	for (int combo = 0; combo < num_combos; combo++) {
 		float sum = 0.0f;
 
 		for (int a = 0; a < num_actions; a++)
-			sum += strategy[(a * num_combos) + b];
+			sum += strategy[(a * num_combos) + combo];
 		
 		//normalize strategy
 		for (int a = 0; a < num_actions; a++) {
-			int id = (a * num_combos) + b;
+			int id = (a * num_combos) + combo;
 			strategy[id] = sum > 0.0f ? 
 				strategy[id] / sum :
 				1.0f / (float)num_actions;
@@ -110,7 +97,7 @@ void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int
 }
 
 GameState apply_bet(GameState current_state, int action) {
-	GameState = next_state = current_state;
+	GameState next_state = current_state;
 	next_state.num_actions_this_street += 1;
 	int bet_size = 0;
 
@@ -120,11 +107,12 @@ GameState apply_bet(GameState current_state, int action) {
 			return next_state;
 		case PASS:
 			bet_size = current_state.p2_commit - current_state.p1_commit;
-			int (current_state.active_player == 1)
+			if (current_state.active_player == 1)
 				bet_size = -bet_size; 
+			break;
 		case B10:
 			bet_size = current_state.pot * 0.1;
-			break:
+			break;
 		case B25:
 			bet_size = current_state.pot * 0.25;
 			break;
@@ -139,7 +127,7 @@ GameState apply_bet(GameState current_state, int action) {
 			break;
 		case R3x:
 			int commit = current_state.p2_commit - current_state.p1_commit;
-			int (current_state.active_player == 1)
+			if (current_state.active_player == 1)
 				commit = -commit; 
 
 			bet_size = commit * 3;
@@ -189,7 +177,7 @@ GameState apply_deal(GameState current_state, int card_idx) {
 }
 
 
-void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void action_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	int8_t legal_actions[8]; //8b align 
 	uint8_t active = node->active_player;
 	int action_count = get_legal_actions(state, legal_actions);
@@ -199,7 +187,7 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 
 	calculate_strategy(node->regret_sum, strategy, action_count, num_combos);
 
-	for (int action = 0; i < action_count; i++) {
+	for (int action = 0; action < action_count; action++) {
 		float* next_p1_reach = (float*) malloc(num_combos*sizeof(float));
 		float* next_p2_reach = (float*) malloc(num_combos*sizeof(float));
 		memcpy(next_p1_reach, p1_reach, sizeof(float) * num_combos);
@@ -212,11 +200,11 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 		 * the same way as AA.
 		 */
 		for (int combo = 0; combo < num_combos; combo++) {
-			int idx = (a * num_combos) + combo;
-			if (active_player == 0)
-				next_p1_reach[b] *= strategy[idx];
+			int idx = (action * num_combos) + combo;
+			if (active == 0)
+				next_p1_reach[combo] *= strategy[idx];
 			else
-				next_p2_reach[b] *= strategy[idx];
+				next_p2_reach[combo] *= strategy[idx];
 		}
 
 		GameState next_state = apply_bet(state, legal_actions[action]);
@@ -248,7 +236,7 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 	 * We update regret based on the chance the opponent will take an combo of an action
 	 * We update strategy based on the chance we'll perform a specific combo of an action
 	 */
-	for (int action = 0; action < action_count, action++) {
+	for (int action = 0; action < action_count; action++) {
 		for (int combo = 0; combo < num_combos; combo++) {
 			int id = (action * num_combos) + combo;
 			
@@ -264,10 +252,10 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 	}
 
 	free(strategy);
-	free(action_utils);
+	free(action_expected_util);
 }	
 
-void chance_node(PublicNode* node, GameState* state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	memset(expected_util, 0, num_combos * sizeof(float));
 	float* child_expected_util = (float*)malloc(num_combos * sizeof(float));
 
@@ -282,9 +270,9 @@ void chance_node(PublicNode* node, GameState* state, int num_combos, float* p1_r
 	free(child_expected_util);
 }
 
-void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	//we're finally setting the EV
-	memset(out_util, 0, num_combos * sizeof(float));	
+	memset(expected_util, 0, num_combos * sizeof(float));	
 
 	//It's really simple if we have a fold, we're just counting commits
 	if (state.last_action_was_fold) {
@@ -324,19 +312,19 @@ void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1
 		if (state.active_player == 0)
 			expected_util[p1c] = ev;
 		else
-			expected_util[p2c] = ev;
+			expected_util[p1c] = -ev;
 	}
 }
 
 
 
-void dcfr(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void dcfr(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	if (node->type == NODE_ACTION)
 		action_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
 	else if (node->type == NODE_CHANCE)
 		chance_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
 	else if (node->type == NODE_TERMINAL)
-		terminal_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
+		terminal_node(state, num_combos, p1_reach, p2_reach, expected_util);
 }
 
 void discount_tree(PublicNode* node, int num_combos, int t, float alpha, float beta, float gamma) {

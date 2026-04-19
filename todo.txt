@@ -1,0 +1,6 @@
+! Make src/ build the solver at all: include dcfr.c, fix compile errors.
+Add a tree builder in src/ with explicit runouts and no isomorphic weighting.
+Make get_legal_actions() and apply_bet() agree with the builder.
+Make terminal evaluation exact for combos, including dead-card filtering.
+Add the outer training loop and root setup in main.c.
+Only after that, add nicer output like average strategy grids or exploitability.
