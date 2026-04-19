@@ -141,6 +141,30 @@ GameState apply_bet(GameState current_state, int action) {
 	return next_state;
 }
 
+GameState apply_deal(GameState current_state, int card_idx) {
+	GameState next_state = current_state;
+
+	int rank = card_idx % 13;
+	int suit = card_idx / 13;
+
+	uint64_t new_card_mask = 1ULL << (rank + (suit * 16));
+
+	next_state.board |= new_card_mask;
+
+	next_state.street += 1;
+	
+	next_state.p1_commit = 0;
+	next_state.p2_commit = 0;
+	next_state.raises_this_street = 0;
+	next_state.num_actions_this_street = 0;
+	next_state.last_action_was_fold = 0;
+
+	next_state.active_player = 0; //oop always acts first
+	
+	return next_state;
+}
+
+
 void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	int8_t legal_actions[8]; //8b align 
 	uint8_t active = node->active_player;
@@ -175,7 +199,7 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 		
 		//we calculate utility on a per-action basis, per node
 		float* child_expected_util = &action_expected_util[action * num_combos];
-		walk_tree(node->children[action], next_state, num_combos, next_p1_reach, next_p2_reach, child_expected_util);
+		dcfr(node->children[action], next_state, num_combos, next_p1_reach, next_p2_reach, child_expected_util);
 
 		/*
 		 * update utility, the child node is from perspective of next player so we must reverse it
@@ -219,6 +243,20 @@ void action_node(PublicNode* node, GameState *state, int num_combos, float* p1_r
 	free(action_utils);
 }	
 
+void chance_node(PublicNode* node, GameState* state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+	memset(expected_util, 0, num_combos * sizeof(float));
+	float* child_expected_util = (float*)malloc(num_combos * sizeof(float));
+
+	for (int i = 0; i < node->num_children; i++) {
+		GameState next_state = apply_deal(state, node->dealt_cards[i]);
+		dcfr(node->children[i], next_state, num_combos, p1_reach, p2_reach, child_expected_util);
+		
+		for (int combo = 0; combo < num_combos; combo++)
+			expected_util[combo] += child_expected_util[combo];
+	}
+
+	free(child_expected_util);
+}
 
 void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
 	//we're finally setting the EV
@@ -269,11 +307,11 @@ void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1
 
 
 void dcfr(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
-	if (node->type == NODE_ACTION) {
-		action_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
-	}
-	else if (node->type == NODE_TERMINAL) {
-		terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
-	}
+	if (node->type == NODE_ACTION)
+		action_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
+	else if (node->type == NODE_CHANCE)
+		chance_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
+	else if (node->type == NODE_TERMINAL)
+		terminal_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
 }
 
