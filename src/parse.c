@@ -40,3 +40,19 @@ uint64_t parse_board_string(const char* board_str) {
 	return board_mask;
 }
 
+//WARNING: Generated with AI. Used for creating a mask out of a combo, still testing.
+static inline uint64_t card_bit(int card) {
+	int rank = card % 13;
+	int suit = card / 13;
+	return 1ULL << (rank + suit * 16);
+}
+uint64_t get_mask_for_combo(int combo_idx) {
+	if (combo_idx < 0 || combo_idx >= 1326) {
+		return 0;
+	}
+	int c1 = (int)floor((103.0 - sqrt(10609.0 - 8.0 * combo_idx)) / 2.0);
+	int row_start = c1 * (103 - c1) / 2;
+	int offset = combo_idx - row_start;
+	int c2 = c1 + 1 + offset;
+	return card_bit(c1) | card_bit(c2);
+}

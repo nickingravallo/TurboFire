@@ -13,6 +13,8 @@
 
 #include <stdint.h>
 
+#include "parse.h"
+
 int get_legal_actions(GameState* state, int8_t* out_actions) {
 	uint8_t act = 0;
 	if (state->active_player == P1) {
@@ -235,9 +237,8 @@ void terminal_node(PublicNode* node, GameState *state, int num_combos, float* p1
 
 	int combo_scores[1326] = {0};
 	for (int combo = 0; combo < num_combos; combo++) {
-		//TODO
-		//evalaute_board()
-		//get hand mask
+		uint64_t hand_mask = get_mask_for_combo(combo); //WARNING: FUNCTION AI GENERATED
+		combo_scores[combo] = evaluate_board(hand_mask, state.board);
 	}
 
 	for (int p1c = 0; p1c < num_combos; p1c++) {
