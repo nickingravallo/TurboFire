@@ -1,5 +1,110 @@
 #include "dcfr.h"
 
+#define MAX_COMBOS 1326
+
+static uint64_t combo_masks[MAX_COMBOS];
+static int combo_masks_ready = 0;
+
+static void ensure_combo_masks(int num_combos) {
+	int limit = num_combos < MAX_COMBOS ? num_combos : MAX_COMBOS;
+
+	for (int combo = combo_masks_ready; combo < limit; combo++)
+		combo_masks[combo] = get_mask_for_combo(combo);
+
+	combo_masks_ready = limit;
+}
+
+static int combo_is_dead(uint64_t combo_mask, uint64_t board_mask) {
+	return (combo_mask & board_mask) != 0;
+}
+
+static int acting_commit(GameState state) {
+	return state.active_player == P1 ? state.p1_commit : state.p2_commit;
+}
+
+static int opposing_commit(GameState state) {
+	return state.active_player == P1 ? state.p2_commit : state.p1_commit;
+}
+
+static int acting_stack(GameState state) {
+	return state.active_player == P1 ? state.p1_stack : state.p2_stack;
+}
+
+static int opposing_stack(GameState state) {
+	return state.active_player == P1 ? state.p2_stack : state.p1_stack;
+}
+
+static int has_outstanding_bet(GameState state) {
+	return acting_commit(state) != opposing_commit(state);
+}
+
+static int max_total_commit(GameState state) {
+	int my_total = acting_commit(state) + acting_stack(state);
+	int opp_total = opposing_commit(state) + opposing_stack(state);
+
+	return my_total < opp_total ? my_total : opp_total;
+}
+
+static int requested_bet_size(GameState state, int action) {
+	switch (action) {
+		case B10:
+			return (int)(state.pot * 0.1f);
+		case B25:
+			return (int)(state.pot * 0.25f);
+		case B52:
+			return (int)(state.pot * 0.52f);
+		case B100:
+			return state.pot;
+		case B123:
+			return (int)(state.pot * 1.23f);
+		case R3x: {
+			int diff = opposing_commit(state) - acting_commit(state);
+			return diff > 0 ? diff * 3 : 0;
+		}
+		default:
+			return 0;
+	}
+}
+
+static int get_bet_size_for_action(GameState state, int action) {
+	if (action == PASS) {
+		int diff = opposing_commit(state) - acting_commit(state);
+		int target_total = opposing_commit(state);
+		int max_total = max_total_commit(state);
+
+		if (diff <= 0)
+			return 0;
+
+		if (target_total > max_total)
+			target_total = max_total;
+
+		return target_total - acting_commit(state);
+	}
+
+	int requested = requested_bet_size(state, action);
+	int max_additional = max_total_commit(state) - acting_commit(state);
+
+	if (max_additional <= 0)
+		return 0;
+
+	if (requested <= 0)
+		requested = 1;
+
+	if (requested > max_additional)
+		requested = max_additional;
+
+	return requested;
+}
+
+static int seen_bet_size(const int* sizes, int count, int bet_size) {
+	for (int i = 0; i < count; i++) {
+		if (sizes[i] == bet_size)
+			return 1;
+	}
+
+	return 0;
+}
+
 void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_starting_range, float* p2_starting_range, int iteration) {
 	float* p1_reach  = (float*)malloc(num_combos * sizeof(float));
 	float* p2_reach  = (float*)malloc(num_combos * sizeof(float));
@@ -26,41 +131,34 @@ void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_
 
 int get_legal_actions(GameState state, int8_t* out_actions) {
 	uint8_t act = 0;
-	if (state.active_player == P1) {
-		if (state.num_actions_this_street) //previous actions, we're now allowed to fold
-			out_actions[act++] = FOLD;
-		out_actions[act++] = PASS; //chk / call	
-		
-		//we can only raise after IP has performed
-		if (state.num_actions_this_street     && 
-		    state.num_actions_this_street % 2 &&
-		    state.raises_this_street < 3) {
-			out_actions[act++] = R3x;
-			//will add more...
-		}
-		else {
-			out_actions[act++] = B10;
-			out_actions[act++] = B25;
-			out_actions[act++] = B52;
-			out_actions[act++] = B100;
-			out_actions[act++] = B123;
-		}
-	}
-	else { //P2
-		if (state.raises_this_street)//vs bet, not check
-			out_actions[act++] = FOLD;
-		out_actions[act++] = PASS;
-		if (state.raises_this_street && state.raises_this_street < 3) //keep raise in order
-			out_actions[act++] = R3x;
-		else {
-			out_actions[act++] = B10;
-			out_actions[act++] = B25;
-			out_actions[act++] = B52;
-			out_actions[act++] = B100;
-			out_actions[act++] = B123;
+	int facing_bet = has_outstanding_bet(state);
 
+	if (facing_bet)
+		out_actions[act++] = FOLD;
+
+	out_actions[act++] = PASS;
+
+	if (facing_bet) {
+		if (state.raises_this_street < 3 && get_bet_size_for_action(state, R3x) > 0)
+			out_actions[act++] = R3x;
+	}
+	else {
+		int aggressive_actions[] = {B10, B25, B52, B100, B123};
+		int seen_sizes[5];
+		int seen_count = 0;
+
+		for (int i = 0; i < 5; i++) {
+			int bet_size = get_bet_size_for_action(state, aggressive_actions[i]);
+
+			if (bet_size <= 0)
+				continue;
+
+			if (seen_bet_size(seen_sizes, seen_count, bet_size))
+				continue;
+
+			seen_sizes[seen_count++] = bet_size;
+			out_actions[act++] = aggressive_actions[i];
 		}
-		
 	}
 
 	return act;
@@ -99,42 +197,29 @@ void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int
 GameState apply_bet(GameState current_state, int action) {
 	GameState next_state = current_state;
 	next_state.num_actions_this_street += 1;
-	int bet_size = 0;
+	int bet_size;
+
+	if (action == FOLD) {
+		next_state.last_action_was_fold = 1;
+		return next_state;
+	}
+
+	bet_size = get_bet_size_for_action(current_state, action);
 
 	switch (action) {
-		case FOLD:
-			next_state.last_action_was_fold = 1;
-			return next_state;
 		case PASS:
-			bet_size = current_state.p2_commit - current_state.p1_commit;
-			if (current_state.active_player == 1)
-				bet_size = -bet_size; 
-			break;
 		case B10:
-			bet_size = current_state.pot * 0.1;
-			break;
 		case B25:
-			bet_size = current_state.pot * 0.25;
-			break;
 		case B52:
-			bet_size = current_state.pot * 0.52;
-			break;
 		case B100:
-			bet_size = current_state.pot;
-			break;
 		case B123:
-			bet_size = current_state.pot * 1.23;
 			break;
 		case R3x:
-			int commit = current_state.p2_commit - current_state.p1_commit;
-			if (current_state.active_player == 1)
-				commit = -commit; 
-
-			bet_size = commit * 3;
 			next_state.raises_this_street += 1;
 			break;
 		default:
 			printf("ERR: BAD ACTION IN APPLY_BET %d\n", action);
+			return next_state;
 	}
 	
 	if (next_state.active_player == 0) {
@@ -256,43 +341,71 @@ void action_node(PublicNode* node, GameState state, int num_combos, float* p1_re
 }	
 
 void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+	ensure_combo_masks(num_combos);
 	memset(expected_util, 0, num_combos * sizeof(float));
 	float* child_expected_util = (float*)malloc(num_combos * sizeof(float));
+	float* next_p1_reach = (float*)malloc(num_combos * sizeof(float));
+	float* next_p2_reach = (float*)malloc(num_combos * sizeof(float));
 
 	for (int i = 0; i < node->num_children; i++) {
 		GameState next_state = apply_deal(state, node->dealt_cards[i]);
-		dcfr(node->children[i], next_state, num_combos, p1_reach, p2_reach, child_expected_util);
+		float weight = node->num_children ? 1.0f / (float)node->num_children : 0.0f;
+
+		for (int combo = 0; combo < num_combos; combo++) {
+			if (combo_is_dead(combo_masks[combo], next_state.board)) {
+				next_p1_reach[combo] = 0.0f;
+				next_p2_reach[combo] = 0.0f;
+			}
+			else {
+				next_p1_reach[combo] = p1_reach[combo];
+				next_p2_reach[combo] = p2_reach[combo];
+			}
+		}
+
+		dcfr(node->children[i], next_state, num_combos, next_p1_reach, next_p2_reach, child_expected_util);
 		
 		for (int combo = 0; combo < num_combos; combo++)
-			expected_util[combo] += child_expected_util[combo];
+			expected_util[combo] += child_expected_util[combo] * weight;
 	}
 
 	free(child_expected_util);
+	free(next_p1_reach);
+	free(next_p2_reach);
 }
 
 void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+	ensure_combo_masks(num_combos);
+
 	//we're finally setting the EV
 	memset(expected_util, 0, num_combos * sizeof(float));	
 
 	//It's really simple if we have a fold, we're just counting commits
 	if (state.last_action_was_fold) {
 		for (int combo = 0; combo < num_combos; combo++) {
+			if (combo_is_dead(combo_masks[combo], state.board))
+				continue;
+
 			if (state.active_player == 0)
 				expected_util[combo] = -(float)state.p1_commit;
 			else
-				expected_util[combo] =  -(float)state.p2_commit;
+				expected_util[combo] = -(float)state.p2_commit;
 		}
 		return;
 	}
 
-	int combo_scores[1326] = {0};
+	int combo_scores[MAX_COMBOS] = {0};
 	for (int combo = 0; combo < num_combos; combo++) {
-		uint64_t hand_mask = get_mask_for_combo(combo); //WARNING: FUNCTION AI GENERATED
-		combo_scores[combo] = evaluate_board(hand_mask, state.board);
+		if (combo_is_dead(combo_masks[combo], state.board))
+			continue;
+
+		combo_scores[combo] = evaluate_board(combo_masks[combo], state.board);
 	}
 
 	for (int p1c = 0; p1c < num_combos; p1c++) {
 		if (p1_reach[p1c] == 0.0f)
+			continue;
+
+		if (combo_is_dead(combo_masks[p1c], state.board))
 			continue;
 
 		float ev = 0.0f;
@@ -300,6 +413,13 @@ void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_r
 		for (int p2c = 0; p2c < num_combos; p2c++) {
 			if (p2_reach[p2c] == 0.0f)
 				continue;
+
+			if (combo_is_dead(combo_masks[p2c], state.board))
+				continue;
+
+			if (combo_masks[p1c] & combo_masks[p2c])
+				continue;
+
 			int p1_score = combo_scores[p1c];
 			int p2_score = combo_scores[p2c];
 

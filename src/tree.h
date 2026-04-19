@@ -22,9 +22,6 @@ typedef struct PublicNode {
 	//for action nodes only
 	float* regret_sum;
 	float* strategy_sum;
-
-	//for chance nodes
-	float* chance_weights;
 } PublicNode; //sizeof(48)
 
 typedef struct {
@@ -44,5 +41,8 @@ typedef struct {
 	uint8_t num_actions_this_street;
 	uint8_t last_action_was_fold;
 } GameState; //sizeof(24)
+
+PublicNode* build_tree(GameState state, int num_combos);
+void destroy_tree(PublicNode* node);
 
 #endif //TREE_H
