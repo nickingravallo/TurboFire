@@ -42,6 +42,12 @@ typedef struct {
 	uint8_t last_action_was_fold;
 } GameState; //sizeof(24)
 
+typedef struct {
+    int combo_to_bucket[1326]; 
+    int num_unique_buckets;
+    int padded_buckets;        
+} IsoMap;
+
 PublicNode* build_tree(GameState state, int num_combos);
 void destroy_tree(PublicNode* node);
 

@@ -275,6 +275,56 @@ static PublicNode* build_tree_recursive(TreeArena* arena, GameState state, int n
 	return node;
 }
 
+static inline void fastswap(uint32_t* s, int a, int b) {
+	uint32_t tmp = s[a] ^ s[b];
+	uint32_t msk = (s[a] < s[b]) ? ~0U : 0U;
+	s[a] ^= tmp & msk;
+	s[b] ^= tmp & msk;
+}
+
+static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t board) {
+	unsigned __int128 packed_suits = 0;
+	//0x1FFF -> map of all suits -> 0001111111111111
+	
+	//[board_suit4][priv_suit_4] [board_suit3][priv_suit_3] [board_suit2][priv_suit_2] [board_suit1][priv_suit_1]
+	//[    13b    ][     13b   ] [     13b   ][    13b    ] [     13b   ][    13b    ] [    13b    ][    13b    ]
+	//13*2 = 26 bits for 1 suit board + private, 26*4 packed into 128b
+	//s1
+	packed_suits |= (unsigned __int128)((board >> 0) & 0x1FFF) << 0;
+	packed_suits |= (unsigned __int128)((private_hand >> 0) & 0x1FFF) << 13;
+	//s2
+	packed_suits |= (unsigned __int128)((board >> 16) & 0x1FFF) << 26;
+	packed_suits |= (unsigned __int128)((private_hand >> 16) & 0x1FFF) << 39;
+	//s3
+	packed_suits |= (unsigned __int128)((board >> 32) & 0x1FFF) << 52;
+	packed_suits |= (unsigned __int128)((private_hand >> 32) & 0x1FFF) << 65;
+	//s4
+	packed_suits |= (unsigned __int128)((board >> 48) & 0x1FFF) << 78;
+	packed_suits |= (unsigned __int128)((private_hand >> 48) & 0x1FFF) << 91;
+
+	//0x3FFFFFF - 26b, or board suit + priv suit described above
+	uint32_t s[4];
+	s[0] = (packed_suits >> 0)  & 0x3FFFFFF;
+	s[1] = (packed_suits >> 26) & 0x3FFFFFF;
+	s[2] = (packed_suits >> 52) & 0x3FFFFFF;
+	s[3] = (packed_suits >> 78) & 0x3FFFFFF;
+
+	fastswap(0, 1);
+	fastswap(2, 3); 
+	fastswap(0, 2);
+	fastswap(1, 3); 
+	fastswap(1, 2);
+
+	//pack into canonical 
+	unsigned __int128 canonical = 0;
+	canonical |= ((unsigned __int128)s[0]) << 0;
+	canonical |= ((unsigned __int128)s[1]) << 26;
+	canonical |= ((unsigned __int128)s[2]) << 52;
+	canonical |= ((unsigned __int128)s[3]) << 78;
+
+	return canonical;
+}
+
 void destroy_tree(PublicNode* node) {
 	(void)node;
 
