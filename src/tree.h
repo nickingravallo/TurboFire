@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define MAX_BUCKETS 1184
+
 typedef enum {
 	NODE_ACTION,
 	NODE_CHANCE,

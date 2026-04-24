@@ -309,11 +309,11 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
 	s[2] = (packed_suits >> 52) & 0x3FFFFFF;
 	s[3] = (packed_suits >> 78) & 0x3FFFFFF;
 
-	fastswap(0, 1);
-	fastswap(2, 3); 
-	fastswap(0, 2);
-	fastswap(1, 3); 
-	fastswap(1, 2);
+	fastswap(s, 0, 1);
+	fastswap(s, 2, 3); 
+	fastswap(s, 0, 2);
+	fastswap(s, 1, 3); 
+	fastswap(s, 1, 2);
 
 	//pack into canonical 
 	unsigned __int128 canonical = 0;
@@ -323,6 +323,46 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
 	canonical |= ((unsigned __int128)s[3]) << 78;
 
 	return canonical;
+}
+
+void build_isomap(uint64_t board_mask, IsoMap* out_map) {
+	out_map->num_unique_buckets = 0;
+	unsigned __int128 seen_signatures[MAX_BUCKETS];
+
+	int combo_idx = 0;
+	for (int c1 = 0; c1 < 52; c1++) {
+		for (int c2 = c1 + 1; c2 < 52; c2++) {
+			int r1 = c1 % 13;
+			int r2 = c2 % 13;
+			int s1 = c1 / 13;
+			int s2 = c2 / 13;
+
+			uint64_t combo_mask = (1ULL << (r1 + (s1 * 16))) | (1ULL << (r2 + (s2 * 16)));
+
+			if ((combo_mask & board_mask) != 0) //check dead hand, overlapping board / combo
+				out_map->combo_to_bucket[combo_idx] = -1;
+			else {
+				unsigned __int128 sig = get_canonical_hand(combo_mask, board_mask);
+
+				int bucket = -1;
+				for (int b = 0; b < out_map->num_unique_buckets; b++) {
+					if (seen_signatures[b] == sig) {
+						bucket = b;
+						break;
+					}
+				}
+
+				if (bucket == -1) {
+					bucket = out_map->num_unique_buckets;
+					seen_signatures[bucket] = sig;
+					out_map->num_unique_buckets++;
+				}
+
+				out_map->combo_to_bucket[combo_idx] = bucket;
+			}
+			combo_idx++;
+		}
+	}
 }
 
 void destroy_tree(PublicNode* node) {
