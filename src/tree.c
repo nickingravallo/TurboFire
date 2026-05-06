@@ -197,6 +197,8 @@ static PublicNode* build_chance_node(TreeArena* arena, GameState state, int num_
 	for (int i = 0; i < child_count; i++) {
 		GameState next_state = apply_deal(state, dealt_cards[i]);
 
+		//IMPLEMENT ISOMORPHIC RUNOUTS HERE
+
 		node->dealt_cards[i] = dealt_cards[i];
 		node->children[i] = build_tree_recursive(arena, next_state, num_combos);
 		if (!node->children[i])
@@ -323,6 +325,29 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
 	canonical |= ((unsigned __int128)s[3]) << 78;
 
 	return canonical;
+}
+
+int get_isomorphic_runouts(GameState state, int* unique_cards, float* weights) {
+	int num_unique = 0;
+
+	int suits_on_board[4] = { 0 };
+	for (int s = 0; s < 4; s++) {
+		if (state.board & (0x1FFFULL << (s * 16))
+			suits_on_board[s] = 1;
+	}
+
+	//absent suits are mapped to first absent suit
+	int canonical_suit[4];
+	int first_absent = -1;
+	for (int s = 0; s < 4; s++) {
+		if (suits_on_board[s])
+			canonical_suit[s] = s;
+		else {
+			if (first_absent == -1)
+				first_absent = s;
+			canonical_suit[s] = first_absent;
+		}
+	}
 }
 
 void build_isomap(uint64_t board_mask, float* p1_reach, float* p2_reach, IsoMap* out_map) {
