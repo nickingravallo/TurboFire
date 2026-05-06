@@ -27,6 +27,12 @@ typedef struct PublicNode {
 } PublicNode; //sizeof(48)
 
 typedef struct {
+	uint8_t representative_card;
+	uint8_t multiplicity;
+	uint8_t members[4];
+} IsoRunout;
+
+typedef struct {
 	uint64_t board;
 
 	uint16_t pot;

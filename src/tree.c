@@ -327,27 +327,8 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
 	return canonical;
 }
 
-int get_isomorphic_runouts(GameState state, int* unique_cards, float* weights) {
-	int num_unique = 0;
+int get_isomorphic_runouts(GameState state, IsoRunout* runout) {
 
-	int suits_on_board[4] = { 0 };
-	for (int s = 0; s < 4; s++) {
-		if (state.board & (0x1FFFULL << (s * 16))
-			suits_on_board[s] = 1;
-	}
-
-	//absent suits are mapped to first absent suit
-	int canonical_suit[4];
-	int first_absent = -1;
-	for (int s = 0; s < 4; s++) {
-		if (suits_on_board[s])
-			canonical_suit[s] = s;
-		else {
-			if (first_absent == -1)
-				first_absent = s;
-			canonical_suit[s] = first_absent;
-		}
-	}
 }
 
 void build_isomap(uint64_t board_mask, float* p1_reach, float* p2_reach, IsoMap* out_map) {
