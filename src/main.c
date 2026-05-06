@@ -60,7 +60,15 @@ int main(int argc, char **argv) {
 	init_uniform_range(board, NUM_COMBOS, p1_range);
 	init_uniform_range(board, NUM_COMBOS, p2_range);
 
-	root = build_tree(initial_state, NUM_COMBOS);
+	//isomorphism map for the solver
+	IsoMap map;
+	build_isomap(board, &map);
+	/*
+	for (int i = 0; i < 1326; i++)
+		printf("h%d: %d\n", i, map.combo_to_bucket[i]);
+	printf("num_unique_buckets: %d, padd_buckets: %d\n", map.num_unique_buckets, map.padded_buckets);
+	*/
+	root = build_tree(initial_state, map.num_unique_buckets, &map);
 	if (!root) {
 		free(p1_range);
 		free(p2_range);

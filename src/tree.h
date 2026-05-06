@@ -50,7 +50,8 @@ typedef struct {
     int padded_buckets;        
 } IsoMap;
 
-PublicNode* build_tree(GameState state, int num_combos);
+PublicNode* build_tree(GameState state, int num_combos, IsoMap* map);
 void destroy_tree(PublicNode* node);
+void build_isomap(uint64_t board, IsoMap* map);
 
 #endif //TREE_H

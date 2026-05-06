@@ -1,8 +1,7 @@
 CC = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -O3 -march=native -fopenmp
-CXXFLAGS = -O3 -std=c++17 -I./omp -fopenmp
-LDFLAGS = -fopenmp
+CFLAGS = -Wall -Wextra -O3 -march=native 
+CXXFLAGS = -O3 -std=c++17 -I./omp 
 
 # All C object files needed
 C_OBJS = main.o parse.o dcfr.o tree.o

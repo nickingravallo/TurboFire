@@ -206,7 +206,7 @@ static PublicNode* build_chance_node(TreeArena* arena, GameState state, int num_
 	return node;
 }
 
-PublicNode* build_tree(GameState state, int num_combos) {
+PublicNode* build_tree(GameState state, int num_combos, IsoMap* map) {
 	TreeArena arena = {0};
 
 	if (mapped_tree_base)
