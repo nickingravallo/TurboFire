@@ -325,7 +325,7 @@ static unsigned __int128 get_canonical_hand(uint64_t private_hand, uint64_t boar
 	return canonical;
 }
 
-void build_isomap(uint64_t board_mask, IsoMap* out_map) {
+void build_isomap(uint64_t board_mask, float* p1_reach, float* p2_reach, IsoMap* out_map) {
 	out_map->num_unique_buckets = 0;
 	unsigned __int128 seen_signatures[MAX_BUCKETS];
 
@@ -336,9 +336,13 @@ void build_isomap(uint64_t board_mask, IsoMap* out_map) {
 			int r2 = c2 % 13;
 			int s1 = c1 / 13;
 			int s2 = c2 / 13;
-
+			/*	
+			if (!p1_reach[combo_idx] && !p2_reach[combo_idx]) {
+				printf("NOT FOUND\n");
+				out_map->combo_to_bucket[combo_idx] = -1;
+			}
+			*/
 			uint64_t combo_mask = (1ULL << (r1 + (s1 * 16))) | (1ULL << (r2 + (s2 * 16)));
-
 			if ((combo_mask & board_mask) != 0) //check dead hand, overlapping board / combo
 				out_map->combo_to_bucket[combo_idx] = -1;
 			else {

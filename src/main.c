@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define NUM_COMBOS 1326
 
@@ -25,14 +26,30 @@ static void init_uniform_range(uint64_t board, int num_combos, float* range) {
 	}
 }
 
+static int init_range_from_arg(const char* path, uint64_t board, int num_combos, float* range) {
+	if (!path || strcmp(path, "uniform") == 0) {
+		init_uniform_range(board, num_combos, range);
+		return 1;
+	}
+
+	return init_range_from_file(path, board, num_combos, range);
+}
+
 int main(int argc, char **argv) {
 	const char* board_str = argc > 1 ? argv[1] : "AsKd4h";
 	int iterations = argc > 2 ? atoi(argv[2]) : 1000;
+	const char* p1_range_path = argc > 3 ? argv[3] : NULL;
+	const char* p2_range_path = argc > 4 ? argv[4] : NULL;
 	uint64_t board;
 	GameState initial_state;
 	PublicNode* root;
 	float* p1_range;
 	float* p2_range;
+
+	if (argc > 5) {
+		fprintf(stderr, "Usage: %s [board] [iterations] [p1_range.json|uniform] [p2_range.json|uniform]\n", argv[0]);
+		return 1;
+	}
 
 	if (iterations < 1)
 		iterations = 1;
@@ -57,12 +74,29 @@ int main(int argc, char **argv) {
 	p1_range = (float*)calloc(NUM_COMBOS, sizeof(float));
 	p2_range = (float*)calloc(NUM_COMBOS, sizeof(float));
 
-	init_uniform_range(board, NUM_COMBOS, p1_range);
-	init_uniform_range(board, NUM_COMBOS, p2_range);
+	if (!p1_range || !p2_range) {
+		free(p1_range);
+		free(p2_range);
+		return 1;
+	}
+
+	if (!init_range_from_arg(p1_range_path, board, NUM_COMBOS, p1_range)) {
+		fprintf(stderr, "Could not parse P1 range: %s\n", p1_range_path);
+		free(p1_range);
+		free(p2_range);
+		return 1;
+	}
+
+	if (!init_range_from_arg(p2_range_path, board, NUM_COMBOS, p2_range)) {
+		fprintf(stderr, "Could not parse P2 range: %s\n", p2_range_path);
+		free(p1_range);
+		free(p2_range);
+		return 1;
+	}
 
 	//isomorphism map for the solver
 	IsoMap map;
-	build_isomap(board, &map);
+	build_isomap(board, p1_range, p2_range, &map);
 	/*
 	for (int i = 0; i < 1326; i++)
 		printf("h%d: %d\n", i, map.combo_to_bucket[i]);

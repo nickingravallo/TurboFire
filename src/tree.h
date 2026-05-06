@@ -52,6 +52,6 @@ typedef struct {
 
 PublicNode* build_tree(GameState state, int num_combos, IsoMap* map);
 void destroy_tree(PublicNode* node);
-void build_isomap(uint64_t board, IsoMap* map);
+void build_isomap(uint64_t board, float* p1_range, float* p2_range, IsoMap* map);
 
 #endif //TREE_H
