@@ -1,9 +1,0 @@
-We need to create a BoardBucketMap object which will map each possible turn
-and river boards to a specific combo.
-
-There's 1 flop map
-49 turn maps
-C(49, 2) river maps
-
-This means we'll need to account for 1226 possible boards, with
-1326 combo-to-buckets in each
