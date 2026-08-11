@@ -17,7 +17,11 @@
 #define B52   3
 #define B100  4
 #define B123  5
+#define R2x   6
 #define R3x   7
+#define R4x   8
+
+#define MAX_LEGAL_ACTIONS 8
 
 #define P1 0
 #define P2 1

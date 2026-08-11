@@ -8,6 +8,8 @@ output/
 .vscode/
 obj/
 notes/
+llm/
+*.jsonl
 
 # Python
 __pycache__/

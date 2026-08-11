@@ -57,9 +57,13 @@ static int requested_bet_size(GameState state, int action) {
 			return state.pot;
 		case B123:
 			return (int)(state.pot * 1.23f);
-		case R3x: {
+		case R2x:
+		case R3x:
+		case R4x: {
 			int diff = opposing_commit(state) - acting_commit(state);
-			return diff > 0 ? diff * 3 : 0;
+			int mult = (action == R2x) ? 2 : (action == R3x) ? 3 : 4;
+
+			return diff > 0 ? diff * mult : 0;
 		}
 		default:
 			return 0;
@@ -139,8 +143,24 @@ int get_legal_actions(GameState state, int8_t* out_actions) {
 	out_actions[act++] = PASS;
 
 	if (facing_bet) {
-		if (state.raises_this_street < 3 && get_bet_size_for_action(state, R3x) > 0)
-			out_actions[act++] = R3x;
+		if (state.raises_this_street < 2) {
+			int raise_actions[] = {R2x, R3x, R4x};
+			int seen_sizes[3];
+			int seen_count = 0;
+
+			for (int i = 0; i < 3; i++) {
+				int bet_size = get_bet_size_for_action(state, raise_actions[i]);
+
+				if (bet_size <= 0)
+					continue;
+
+				if (seen_bet_size(seen_sizes, seen_count, bet_size))
+					continue;
+
+				seen_sizes[seen_count++] = bet_size;
+				out_actions[act++] = raise_actions[i];
+			}
+		}
 	}
 	else {
 		int aggressive_actions[] = {B10, B25, B52, B100, B123};
@@ -214,7 +234,9 @@ GameState apply_bet(GameState current_state, int action) {
 		case B100:
 		case B123:
 			break;
+		case R2x:
 		case R3x:
+		case R4x:
 			next_state.raises_this_street += 1;
 			break;
 		default:
@@ -263,7 +285,7 @@ GameState apply_deal(GameState current_state, int card_idx) {
 
 
 void action_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
-	int8_t legal_actions[8]; //8b align 
+	int8_t legal_actions[MAX_LEGAL_ACTIONS];
 	uint8_t active = node->active_player;
 	int action_count = get_legal_actions(state, legal_actions);
 

@@ -1,5 +1,6 @@
 #include "tree.h"
 #include "dcfr.h"
+#include "config.h"
 
 #include <stdio.h>
 #include <sys/mman.h>
@@ -148,7 +149,7 @@ static int count_tree_storage(TreeArena* arena, GameState state, int num_combos)
 		return reserve_node_storage(arena, NODE_TERMINAL, 0, 0);
 
 	if (betting_round_closed(state)) {
-		if (state.street >= 2)
+		if (state.street >= MAX_STREET)
 			return reserve_node_storage(arena, NODE_TERMINAL, 0, 0);
 
 		uint8_t dealt_cards[52];
@@ -167,7 +168,7 @@ static int count_tree_storage(TreeArena* arena, GameState state, int num_combos)
 		return 1;
 	}
 
-	int8_t legal_actions[8];
+	int8_t legal_actions[MAX_LEGAL_ACTIONS];
 	int action_count = get_legal_actions(state, legal_actions);
 
 	if (!reserve_node_storage(arena, NODE_ACTION, (uint8_t)action_count, num_combos))
@@ -252,13 +253,13 @@ static PublicNode* build_tree_recursive(TreeArena* arena, GameState state, int n
 		return build_terminal_node(arena, state);
 
 	if (betting_round_closed(state)) {
-		if (state.street >= 2)
+		if (state.street >= MAX_STREET)
 			return build_terminal_node(arena, state);
 
 		return build_chance_node(arena, state, num_combos);
 	}
 
-	int8_t legal_actions[8];
+	int8_t legal_actions[MAX_LEGAL_ACTIONS];
 	int action_count = get_legal_actions(state, legal_actions);
 	PublicNode* node = alloc_node(arena, NODE_ACTION, state.active_player, (uint8_t)action_count, num_combos);
 
