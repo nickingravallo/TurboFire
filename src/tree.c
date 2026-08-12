@@ -1,6 +1,7 @@
 #include "tree.h"
 #include "dcfr.h"
 #include "config.h"
+#include "isomorphism.h"
 
 #include <stdio.h>
 #include <sys/mman.h>
@@ -14,13 +15,6 @@ typedef struct {
 static void* mapped_tree_base = NULL;
 static size_t mapped_tree_size = 0;
 static PublicNode* mapped_tree_root = NULL;
-
-static uint64_t card_mask_from_index(int card_idx) {
-	int rank = card_idx % 13;
-	int suit = card_idx / 13;
-
-	return 1ULL << (rank + (suit * 16));
-}
 
 static size_t align_up(size_t value, size_t alignment) {
 	size_t mask = alignment - 1;
@@ -123,19 +117,7 @@ static int betting_round_closed(GameState state) {
 }
 
 static int collect_runout_cards(uint64_t board, uint8_t* dealt_cards) {
-	int count = 0;
-
-	for (int card = 0; card < 52; card++) {
-		if (board & card_mask_from_index(card))
-			continue;
-
-		if (dealt_cards)
-			dealt_cards[count] = (uint8_t)card;
-
-		count += 1;
-	}
-
-	return count;
+	return collect_isomorphic_runout_cards(board, dealt_cards);
 }
 
 static PublicNode* build_terminal_node(TreeArena* arena, GameState state) {

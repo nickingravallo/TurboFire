@@ -113,10 +113,40 @@ static void init_range_by_percent(uint64_t board, int num_combos, float* range, 
 	}
 }
 
-void init_btn_range(uint64_t board, int num_combos, float* range) {
-	init_range_by_percent(board, num_combos, range, 0.78f);
+static float bb_keep_pct(RangeMode mode) {
+	switch (mode) {
+		case RANGE_CONDENSED:
+			return 0.28f;
+		case RANGE_WIDE:
+		default:
+			return 0.88f;
+	}
 }
 
-void init_bb_range(uint64_t board, int num_combos, float* range) {
-	init_range_by_percent(board, num_combos, range, 0.88f);
+static float btn_keep_pct(RangeMode mode) {
+	switch (mode) {
+		case RANGE_CONDENSED:
+			return 0.25f;
+		case RANGE_WIDE:
+		default:
+			return 0.78f;
+	}
+}
+
+const char* range_mode_label(RangeMode mode) {
+	switch (mode) {
+		case RANGE_CONDENSED:
+			return "condensed (BTN ~25%, BB ~28%)";
+		case RANGE_WIDE:
+		default:
+			return "wide (BTN ~78%, BB ~88%)";
+	}
+}
+
+void init_btn_range(uint64_t board, int num_combos, float* range, RangeMode mode) {
+	init_range_by_percent(board, num_combos, range, btn_keep_pct(mode));
+}
+
+void init_bb_range(uint64_t board, int num_combos, float* range, RangeMode mode) {
+	init_range_by_percent(board, num_combos, range, bb_keep_pct(mode));
 }
