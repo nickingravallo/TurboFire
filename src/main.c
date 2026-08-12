@@ -47,6 +47,7 @@ static void print_help(const char* argv0) {
 		"  --range=condensed       Condensed starting ranges\n"
 		"                          BTN ~25%%, BB ~28%% of live combos\n"
 		"  --condensed             Shortcut for --range=condensed\n"
+		"  --tight                 Shortcut for --range=condensed\n"
 		"  --wide                  Shortcut for --range=wide\n"
 		"\n"
 		"Build-time (Makefile):\n"
@@ -112,7 +113,7 @@ int main(int argc, char **argv) {
 			print_help(argv[0]);
 			return 0;
 		}
-		if (strcmp(arg, "--condensed") == 0) {
+		if (strcmp(arg, "--condensed") == 0 || strcmp(arg, "--tight") == 0) {
 			range_mode = RANGE_CONDENSED;
 			continue;
 		}

@@ -41,15 +41,18 @@ Hard-line `trainingdata.txt` (sampled trajectories) is legacy. Prefer soft JSONL
 Dense full-tree dumps (~100k+ rows/flop) cause low flop diversity. Sparse emit
 is ~670 rows/flop.
 
-Generate data:
+Generate data (flop only). Pick a range, then a seed so the same flops can be reproduced:
 
 ```bash
 cd src
 make
-TARGET_FLOPS=12000 SOFT_MAX_DEPTH=1 SOFT_MAX_COMBOS=96 ITERATIONS=50 \
-  OUT=training_soft_diverse.jsonl ./batch_training_soft.sh
+SEED=42 TARGET_FLOPS=12000 ITERATIONS=50 ./batch_training_soft_wide.sh
+SEED=42 TARGET_FLOPS=12000 ITERATIONS=50 ./batch_training_soft_tight.sh
 ```
 
+- **wide** — most hands play (single-raised pot).
+- **tight** — only strong hands play (3-bet pot).
+- `SEED` chooses which flops get solved; same seed → same boards.
 - Track unique flops via `${OUT}.seen_flops`.
 - Prefer a **new** diverse file; don’t keep growing the old dense ~5GB / 238-flop dump.
 
@@ -136,7 +139,9 @@ Spend plan for ~$10: main run + 2nd seed + optional 85M ablation + buffer.
 | Path | Role |
 |------|------|
 | `src/walk_tree.c` | Soft JSONL emit from `strategy_sum` |
-| `src/batch_training_soft.sh` | Diverse flop batch generator |
+| `src/batch_training_soft.sh` | Shared flop batch generator (`SEED`, `RANGE`) |
+| `src/batch_training_soft_wide.sh` | Flop-only data, wide ranges |
+| `src/batch_training_soft_tight.sh` | Flop-only data, tight ranges |
 | `src/llm/train.py` | MLX soft/hard trainer |
 | `src/llm/torch_train.py` | PyTorch soft trainer (cloud) |
 | `src/llm/torch_model.py` | PyTorch GPT |

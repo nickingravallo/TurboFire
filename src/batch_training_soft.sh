@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# Generate diverse-flop soft-label JSONL.
+# Generate flop-only soft-label JSONL.
 #
-# Per flop we only emit a sparse slice of the tree (see SOFT_* env vars in
-# walk_tree.c), then move on — maximizing unique flops instead of dumping
-# ~100k rows on the same board.
+# Prefer the wrappers:
+#   ./batch_training_soft_wide.sh   most hands play (single-raised pot)
+#   ./batch_training_soft_tight.sh  only strong hands play (3-bet pot)
 #
-# Usage:
-#   ./batch_training_soft.sh
-#   TARGET_FLOPS=3000 OUT=training_soft_diverse.jsonl ./batch_training_soft.sh
+# SEED chooses which flops get solved. Same seed → same boards.
+# If omitted, a seed is picked and saved next to the output file.
 #
-# Env:
-#   TARGET_FLOPS      stop after this many unique flops (default 3000)
-#   TARGET_BYTES      also stop if file reaches this size (default 2 GiB)
-#   ITERATIONS        CFR iters per flop (default 50)
-#   SOFT_MAX_DEPTH    betting depth to emit (default 1: SB open + BB reply)
-#   SOFT_MAX_COMBOS   combos sampled per node (default 96)
+#   SEED=42 ./batch_training_soft_wide.sh
+#   SEED=42 RANGE=tight TARGET_FLOPS=12000 ./batch_training_soft.sh
+#
+#   SEED           which flops to solve (saved to ${OUT}.seed)
+#   RANGE          wide | tight
+#   TARGET_FLOPS   how many different boards to solve
+#   ITERATIONS     how thoroughly each board is solved
+#   OUT            output JSONL path
 
 set -euo pipefail
 
@@ -22,16 +23,58 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 BINARY="${BINARY:-./turbofire}"
-OUT="${OUT:-training_soft_diverse.jsonl}"
-SEEN="${SEEN:-${OUT}.seen_flops}"
+RANGE="${RANGE:-wide}"
 ITERATIONS="${ITERATIONS:-50}"
 TARGET_FLOPS="${TARGET_FLOPS:-10000}"
 TARGET_BYTES="${TARGET_BYTES:-$((2 * 1024 * 1024 * 1024))}"
 export SOFT_MAX_DEPTH="${SOFT_MAX_DEPTH:-1}"
 export SOFT_MAX_COMBOS="${SOFT_MAX_COMBOS:-96}"
 
+case "$RANGE" in
+	wide)
+		RANGE_FLAG="--range=wide"
+		RANGE_SLUG="wide"
+		;;
+	tight|condensed)
+		RANGE_FLAG="--range=condensed"
+		RANGE_SLUG="tight"
+		;;
+	*)
+		echo "error: RANGE must be wide|tight|condensed (got '$RANGE')" >&2
+		exit 1
+		;;
+esac
+
+OUT="${OUT:-training_soft_${RANGE_SLUG}.jsonl}"
+SEEN="${SEEN:-${OUT}.seen_flops}"
+SEED_FILE="${SEED_FILE:-${OUT}.seed}"
+
 RANKS=(2 3 4 5 6 7 8 9 T J Q K A)
 SUITS=(s h d c)
+
+# 31-bit LCG (glibc). Use bits 16–30 like rand(); low bits are correlated
+# and would collapse suits. Keep state in-process — never via $(...).
+LCG_STATE=0
+LCG_RAND=0
+
+lcg_next() {
+	LCG_STATE=$(( (1103515245 * LCG_STATE + 12345) & 0x7FFFFFFF ))
+	LCG_RAND=$(( (LCG_STATE >> 16) & 0x7FFF ))
+}
+
+pick_seed() {
+	if [[ -n "${SEED:-}" ]]; then
+		return
+	fi
+	if [[ -f "$SEED_FILE" ]]; then
+		SEED="$(tr -d '[:space:]' < "$SEED_FILE")"
+		if [[ -n "$SEED" ]]; then
+			echo "resuming seed $SEED from $SEED_FILE" >&2
+			return
+		fi
+	fi
+	SEED="$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')"
+}
 
 file_size() {
 	if [[ ! -f "$1" ]]; then
@@ -45,20 +88,22 @@ file_size() {
 	stat -c%s "$1"
 }
 
-random_card() {
-	local rank="${RANKS[$((RANDOM % ${#RANKS[@]}))]}"
-	local suit="${SUITS[$((RANDOM % ${#SUITS[@]}))]}"
-	printf '%s%s' "$rank" "$suit"
+card_from_idx() {
+	local idx="$1"
+	printf '%s%s' "${RANKS[$((idx % 13))]}" "${SUITS[$((idx / 13))]}"
 }
 
-random_flop() {
-	local c1 c2 c3
+next_flop() {
+	local i1 i2 i3
 	while true; do
-		c1="$(random_card)"
-		c2="$(random_card)"
-		c3="$(random_card)"
-		if [[ "$c1" != "$c2" && "$c1" != "$c3" && "$c2" != "$c3" ]]; then
-			printf '%s%s%s' "$c1" "$c2" "$c3"
+		lcg_next
+		i1=$(( LCG_RAND % 52 ))
+		lcg_next
+		i2=$(( LCG_RAND % 52 ))
+		lcg_next
+		i3=$(( LCG_RAND % 52 ))
+		if [[ "$i1" -ne "$i2" && "$i1" -ne "$i3" && "$i2" -ne "$i3" ]]; then
+			FLOP="$(card_from_idx "$i1")$(card_from_idx "$i2")$(card_from_idx "$i3")"
 			return
 		fi
 	done
@@ -75,25 +120,34 @@ if [[ ! -x "$BINARY" ]]; then
 	exit 1
 fi
 
+pick_seed
+if ! [[ "$SEED" =~ ^[0-9]+$ ]]; then
+	echo "error: SEED must be a non-negative integer (got '$SEED')" >&2
+	exit 1
+fi
+LCG_STATE=$(( SEED & 0x7FFFFFFF ))
+printf '%s\n' "$SEED" > "$SEED_FILE"
+
 touch "$OUT"
 touch "$SEEN"
 size="$(file_size "$OUT")"
 flops="$(wc -l < "$SEEN" | tr -d ' ')"
 echo "diverse soft labels -> $OUT" >&2
+echo "  range=$RANGE_SLUG ($RANGE_FLAG)  seed=$SEED" >&2
 echo "  flops=$flops/$TARGET_FLOPS  size=$size/$TARGET_BYTES" >&2
 echo "  ITERATIONS=$ITERATIONS SOFT_MAX_DEPTH=$SOFT_MAX_DEPTH SOFT_MAX_COMBOS=$SOFT_MAX_COMBOS" >&2
 
 while (( flops < TARGET_FLOPS && size < TARGET_BYTES )); do
-	flop="$(random_flop)"
-	if flop_seen "$flop"; then
+	next_flop
+	if flop_seen "$FLOP"; then
 		continue
 	fi
 
-	echo "solving flop $flop ($((flops + 1))/$TARGET_FLOPS, size=$size)" >&2
-	echo "$flop" >> "$SEEN"
+	echo "solving flop $FLOP ($((flops + 1))/$TARGET_FLOPS, size=$size)" >&2
+	echo "$FLOP" >> "$SEEN"
 
 	# Soft-label rows are JSON objects; drop solver status chatter.
-	"$BINARY" "$flop" "$ITERATIONS" 2>/dev/null \
+	"$BINARY" "$FLOP" "$ITERATIONS" "$RANGE_FLAG" 2>/dev/null \
 		| grep '^{"context":' \
 		>> "$OUT"
 
@@ -101,4 +155,4 @@ while (( flops < TARGET_FLOPS && size < TARGET_BYTES )); do
 	flops="$(wc -l < "$SEEN" | tr -d ' ')"
 done
 
-echo "done: flops=$flops size=$size -> $OUT" >&2
+echo "done: range=$RANGE_SLUG seed=$SEED flops=$flops size=$size -> $OUT" >&2
