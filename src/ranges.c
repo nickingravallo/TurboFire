@@ -115,6 +115,8 @@ static void init_range_by_percent(uint64_t board, int num_combos, float* range, 
 
 static float bb_keep_pct(RangeMode mode) {
 	switch (mode) {
+		case RANGE_TEN_PERCENT:
+			return 0.10f;
 		case RANGE_CONDENSED:
 			return 0.28f;
 		case RANGE_WIDE:
@@ -125,6 +127,8 @@ static float bb_keep_pct(RangeMode mode) {
 
 static float btn_keep_pct(RangeMode mode) {
 	switch (mode) {
+		case RANGE_TEN_PERCENT:
+			return 0.10f;
 		case RANGE_CONDENSED:
 			return 0.25f;
 		case RANGE_WIDE:
@@ -135,6 +139,8 @@ static float btn_keep_pct(RangeMode mode) {
 
 const char* range_mode_label(RangeMode mode) {
 	switch (mode) {
+		case RANGE_TEN_PERCENT:
+			return "top 10% of live combos (both players)";
 		case RANGE_CONDENSED:
 			return "condensed (BTN ~25%, BB ~28%)";
 		case RANGE_WIDE:

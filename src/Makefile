@@ -26,15 +26,19 @@ LDFLAGS = $(OPENMP_LDFLAGS)
 FLOP_CFLAGS = $(CFLAGS_BASE) -DMAX_STREET=0 -DWALK_TREE=1
 # Flop + turn betting, no river. walk_tree off by default (dump is huge).
 TURN_CFLAGS = $(CFLAGS_BASE) -DMAX_STREET=1 -DWALK_TREE=0
+# Full flop + turn + river solve. This can require substantially more than 16 GB.
+RIVER_CFLAGS = $(CFLAGS_BASE) -DMAX_STREET=2 -DWALK_TREE=0
 
 SHARED_C_OBJS = parse.o dcfr.o ranges.o isomorphism.o
 CXX_OBJS = evaluator.o omp/HandEvaluator.o
 
-.PHONY: all turn test clean
+.PHONY: all turn river test clean
 
 all: turbofire
 
 turn: turbofire_turn
+
+river: turbofire_river
 
 test: tests/isomorphism_test
 	./tests/isomorphism_test
@@ -46,6 +50,9 @@ turbofire: main_flop.o tree_flop.o walk_tree.o $(SHARED_C_OBJS) $(CXX_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^
 
 turbofire_turn: main_turn.o tree_turn.o $(SHARED_C_OBJS) $(CXX_OBJS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^
+
+turbofire_river: main_river.o tree_river.o $(SHARED_C_OBJS) $(CXX_OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^
 
 main_flop.o: main.c config.h
@@ -63,6 +70,12 @@ main_turn.o: main.c config.h
 tree_turn.o: tree.c config.h isomorphism.h
 	$(CC) $(TURN_CFLAGS) -c $< -o $@
 
+main_river.o: main.c config.h
+	$(CC) $(RIVER_CFLAGS) -c $< -o $@
+
+tree_river.o: tree.c config.h isomorphism.h
+	$(CC) $(RIVER_CFLAGS) -c $< -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS_BASE) -c $< -o $@
 
@@ -70,4 +83,4 @@ tree_turn.o: tree.c config.h isomorphism.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o omp/*.o turbofire turbofire_turn tests/isomorphism_test
+	rm -f *.o omp/*.o turbofire turbofire_turn turbofire_river tests/isomorphism_test

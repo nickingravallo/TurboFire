@@ -46,6 +46,7 @@ static void print_help(const char* argv0) {
 		"                          BTN ~78%%, BB ~88%% of live combos\n"
 		"  --range=condensed       Condensed starting ranges\n"
 		"                          BTN ~25%%, BB ~28%% of live combos\n"
+		"  --range=10pct           Top 10%% of live combos for both players\n"
 		"  --condensed             Shortcut for --range=condensed\n"
 		"  --tight                 Shortcut for --range=condensed\n"
 		"  --wide                  Shortcut for --range=wide\n"
@@ -53,6 +54,7 @@ static void print_help(const char* argv0) {
 		"Build-time (Makefile):\n"
 		"  make                    turbofire       flop-only + soft JSONL\n"
 		"  make turn               turbofire_turn  flop+turn, no walk_tree\n"
+		"  make river              turbofire_river flop+turn+river, no walk_tree\n"
 		"  make test               isomorphism unit tests\n"
 		"\n"
 		"Env:\n"
@@ -80,6 +82,10 @@ static int parse_range_value(const char* value, RangeMode* out_mode) {
 	}
 	if (strcmp(value, "condensed") == 0 || strcmp(value, "tight") == 0) {
 		*out_mode = RANGE_CONDENSED;
+		return 1;
+	}
+	if (strcmp(value, "10pct") == 0 || strcmp(value, "10%") == 0) {
+		*out_mode = RANGE_TEN_PERCENT;
 		return 1;
 	}
 	return 0;
@@ -123,19 +129,19 @@ int main(int argc, char **argv) {
 		}
 		if (strncmp(arg, "--range=", 8) == 0) {
 			if (!parse_range_value(arg + 8, &range_mode)) {
-				fprintf(stderr, "unknown --range value '%s' (use wide|condensed)\n", arg + 8);
+				fprintf(stderr, "unknown --range value '%s' (use wide|condensed|10pct)\n", arg + 8);
 				return 1;
 			}
 			continue;
 		}
 		if (strcmp(arg, "--range") == 0) {
 			if (i + 1 >= argc) {
-				fprintf(stderr, "--range requires wide|condensed\n");
+				fprintf(stderr, "--range requires wide|condensed|10pct\n");
 				return 1;
 			}
 			i += 1;
 			if (!parse_range_value(argv[i], &range_mode)) {
-				fprintf(stderr, "unknown --range value '%s' (use wide|condensed)\n", argv[i]);
+				fprintf(stderr, "unknown --range value '%s' (use wide|condensed|10pct)\n", argv[i]);
 				return 1;
 			}
 			continue;
