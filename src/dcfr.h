@@ -20,21 +20,33 @@
 #define R2x   6
 #define R3x   7
 #define R4x   8
+#define ALLIN 9
 
 #define MAX_LEGAL_ACTIONS 8
 
-#define P1 0
-#define P2 1
+#define P1 0 /* OOP; acts first postflop (BB) */
+#define P2 1 /* IP (BTN) */
 
+#define MAX_BET_SIZES 5
+#define MAX_RAISE_SIZES 3
+
+int set_bet_sizes(const float* pot_fractions, int count);
+int set_raise_sizes(const float* multipliers, int count);
+int set_max_raises(int max_raises);
+void set_allin_enabled(int enabled);
+float action_size_value(int action);
+int configured_bet_count(void);
+int configured_raise_count(void);
+int configured_max_raises(void);
 void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_starting_range, float* p2_starting_range, int iteration);
 int get_legal_actions(GameState state, int8_t* out_actions);
 void calculate_strategy(float* regret_sum, float* strategy, int num_actions, int num_combos);
 GameState apply_bet(GameState current_state, int action);
 GameState apply_deal(GameState current_state, int card_idx);
-void action_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
-void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
-void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
-void dcfr(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util);
+void action_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* p1_util, float* p2_util);
+void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* p1_util, float* p2_util);
+void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_reach, float* p1_util, float* p2_util);
+void dcfr(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* p1_util, float* p2_util);
 void discount_tree(PublicNode* node, int num_combos, int t, float alpha, float beta, float gamma);
 
 #endif // DCFR_H

@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-// P1 = BB (OOP), P2 = BTN (IP) in heads-up postflop
+// P1 = OOP (BB), P2 = IP (BTN) in heads-up postflop.
+// Soft-label tokens are HERO_/OPP_ (hole-card holder's viewpoint), not seats.
 typedef enum {
 	RANGE_WIDE = 0,      // BTN ~78%, BB ~88% (default SRP-ish)
 	RANGE_CONDENSED = 1, // BTN ~25%, BB ~28% (tight / 3bet-pot-ish)

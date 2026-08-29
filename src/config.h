@@ -7,6 +7,7 @@
 // Makefile overrides these:
 //   make            → turbofire       MAX_STREET=0 WALK_TREE=1  (flop soft labels)
 //   make turn       → turbofire_turn  MAX_STREET=1 WALK_TREE=0  (flop+turn solve)
+//   make river      → turbofire_river MAX_STREET=2 WALK_TREE=1  (through-river labels)
 #ifndef MAX_STREET
 #define MAX_STREET 0
 #endif

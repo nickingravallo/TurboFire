@@ -1,8 +1,64 @@
 #include "dcfr.h"
+static float g_bet_sizes[MAX_BET_SIZES] = {0.10f, 0.25f, 0.52f, 1.00f, 1.23f};
+static float g_raise_sizes[MAX_RAISE_SIZES] = {2.0f, 3.0f, 4.0f};
+static int g_bet_count = MAX_BET_SIZES;
+static int g_raise_count = MAX_RAISE_SIZES;
+static int g_max_raises = 2;
+static int g_allin_enabled = 0;
+
+int set_bet_sizes(const float* pot_fractions, int count) {
+	if (!pot_fractions || count < 1 || count > MAX_BET_SIZES)
+		return 0;
+	for (int i = 0; i < count; i++) {
+		if (pot_fractions[i] <= 0.0f)
+			return 0;
+		g_bet_sizes[i] = pot_fractions[i];
+	}
+	g_bet_count = count;
+	return 1;
+}
+
+int set_raise_sizes(const float* multipliers, int count) {
+	if (!multipliers || count < 1 || count > MAX_RAISE_SIZES)
+		return 0;
+	for (int i = 0; i < count; i++) {
+		if (multipliers[i] <= 1.0f)
+			return 0;
+		g_raise_sizes[i] = multipliers[i];
+	}
+	g_raise_count = count;
+	return 1;
+}
+
+int set_max_raises(int max_raises) {
+	if (max_raises < 0 || max_raises > 2)
+		return 0;
+	g_max_raises = max_raises;
+	return 1;
+}
+
+void set_allin_enabled(int enabled) {
+	g_allin_enabled = enabled != 0;
+}
+
+float action_size_value(int action) {
+	if (action >= B10 && action <= B123)
+		return g_bet_sizes[action - B10] * 100.0f;
+	if (action >= R2x && action <= R4x)
+		return g_raise_sizes[action - R2x];
+	return 0.0f;
+}
+
+int configured_bet_count(void) { return g_bet_count; }
+int configured_raise_count(void) { return g_raise_count; }
+int configured_max_raises(void) { return g_max_raises; }
+
 #include "isomorphism.h"
 
-#include <omp.h>
 #include <stdlib.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #define MAX_COMBOS 1326
 #define MAX_ACTION_DEPTH 64
@@ -12,7 +68,8 @@ static int combo_masks_ready = 0;
 
 typedef struct {
 	float* strategy;
-	float* action_util;
+	float* p1_action_util;
+	float* p2_action_util;
 	float* next_p1;
 	float* next_p2;
 	int capacity_combos;
@@ -22,8 +79,10 @@ typedef struct {
 typedef struct {
 	float* next_p1;
 	float* next_p2;
-	float* child_util;
-	float* local_util;
+	float* p1_child_util;
+	float* p2_child_util;
+	float* p1_local_util;
+	float* p2_local_util;
 	int capacity_combos;
 } ChanceScratch;
 
@@ -56,10 +115,12 @@ static ActionFrame* push_action_frame(int num_combos, int action_count) {
 		size_t action_bytes = (size_t)action_count * (size_t)num_combos * sizeof(float);
 
 		free(frame->strategy);
-		free(frame->action_util);
+		free(frame->p1_action_util);
+		free(frame->p2_action_util);
 		frame->strategy = (float*)malloc(action_bytes);
-		frame->action_util = (float*)malloc(action_bytes);
-		if (!frame->strategy || !frame->action_util)
+		frame->p1_action_util = (float*)malloc(action_bytes);
+		frame->p2_action_util = (float*)malloc(action_bytes);
+		if (!frame->strategy || !frame->p1_action_util || !frame->p2_action_util)
 			return NULL;
 		frame->capacity_actions = action_count;
 	}
@@ -84,13 +145,18 @@ static int ensure_chance_scratch(int num_combos) {
 
 	free(s->next_p1);
 	free(s->next_p2);
-	free(s->child_util);
-	free(s->local_util);
+	free(s->p1_child_util);
+	free(s->p2_child_util);
+	free(s->p1_local_util);
+	free(s->p2_local_util);
 	s->next_p1 = (float*)malloc((size_t)num_combos * sizeof(float));
 	s->next_p2 = (float*)malloc((size_t)num_combos * sizeof(float));
-	s->child_util = (float*)malloc((size_t)num_combos * sizeof(float));
-	s->local_util = (float*)malloc((size_t)num_combos * sizeof(float));
-	if (!s->next_p1 || !s->next_p2 || !s->child_util || !s->local_util)
+	s->p1_child_util = (float*)malloc((size_t)num_combos * sizeof(float));
+	s->p2_child_util = (float*)malloc((size_t)num_combos * sizeof(float));
+	s->p1_local_util = (float*)malloc((size_t)num_combos * sizeof(float));
+	s->p2_local_util = (float*)malloc((size_t)num_combos * sizeof(float));
+	if (!s->next_p1 || !s->next_p2 || !s->p1_child_util ||
+		!s->p2_child_util || !s->p1_local_util || !s->p2_local_util)
 		return 0;
 
 	s->capacity_combos = num_combos;
@@ -138,28 +204,13 @@ static int max_total_commit(GameState state) {
 }
 
 static int requested_bet_size(GameState state, int action) {
-	switch (action) {
-		case B10:
-			return (int)(state.pot * 0.1f);
-		case B25:
-			return (int)(state.pot * 0.25f);
-		case B52:
-			return (int)(state.pot * 0.52f);
-		case B100:
-			return state.pot;
-		case B123:
-			return (int)(state.pot * 1.23f);
-		case R2x:
-		case R3x:
-		case R4x: {
-			int diff = opposing_commit(state) - acting_commit(state);
-			int mult = (action == R2x) ? 2 : (action == R3x) ? 3 : 4;
-
-			return diff > 0 ? diff * mult : 0;
-		}
-		default:
-			return 0;
+	if (action >= B10 && action <= B123)
+		return (int)(state.pot * g_bet_sizes[action - B10]);
+	if (action >= R2x && action <= R4x) {
+		int diff = opposing_commit(state) - acting_commit(state);
+		return diff > 0 ? (int)(diff * g_raise_sizes[action - R2x]) : 0;
 	}
+	return 0;
 }
 
 static int get_bet_size_for_action(GameState state, int action) {
@@ -182,6 +233,8 @@ static int get_bet_size_for_action(GameState state, int action) {
 
 	if (max_additional <= 0)
 		return 0;
+	if (action == ALLIN)
+		return max_additional;
 
 	if (requested <= 0)
 		requested = 1;
@@ -204,12 +257,14 @@ static int seen_bet_size(const int* sizes, int count, int bet_size) {
 void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_starting_range, float* p2_starting_range, int iteration) {
 	float* p1_reach  = (float*)malloc(num_combos * sizeof(float));
 	float* p2_reach  = (float*)malloc(num_combos * sizeof(float));
-	float* root_util = (float*)malloc(num_combos * sizeof(float));
+	float* p1_root_util = (float*)malloc(num_combos * sizeof(float));
+	float* p2_root_util = (float*)malloc(num_combos * sizeof(float));
 
 	for (int i = 0; i < num_combos; i++) {
 		p1_reach[i] = p1_starting_range[i];
 		p2_reach[i] = p2_starting_range[i];
-		root_util[i] = 0.0f;
+		p1_root_util[i] = 0.0f;
+		p2_root_util[i] = 0.0f;
 	}
 
 	//alpha = 1.5f;
@@ -218,11 +273,12 @@ void train(PublicNode* root, GameState initial_state, int num_combos, float* p1_
 	//this is recommended from the DCFR (2019) paper
 	if (iteration > 1)
 		discount_tree(root, num_combos, iteration, 1.5f, 0.5f, 2.0f);
-	dcfr(root, initial_state, num_combos, p1_reach, p2_reach, root_util);
+	dcfr(root, initial_state, num_combos, p1_reach, p2_reach, p1_root_util, p2_root_util);
 
 	free(p1_reach);
 	free(p2_reach);
-	free(root_util);
+	free(p1_root_util);
+	free(p2_root_util);
 }
 
 int get_legal_actions(GameState state, int8_t* out_actions) {
@@ -235,15 +291,16 @@ int get_legal_actions(GameState state, int8_t* out_actions) {
 	out_actions[act++] = PASS;
 
 	if (facing_bet) {
-		if (state.raises_this_street < 2) {
+		if (state.raises_this_street < g_max_raises) {
 			int raise_actions[] = {R2x, R3x, R4x};
-			int seen_sizes[3];
+			int seen_sizes[MAX_RAISE_SIZES + 1];
 			int seen_count = 0;
+			int call_size = get_bet_size_for_action(state, PASS);
 
-			for (int i = 0; i < 3; i++) {
+			for (int i = 0; i < g_raise_count; i++) {
 				int bet_size = get_bet_size_for_action(state, raise_actions[i]);
 
-				if (bet_size <= 0)
+				if (bet_size <= call_size)
 					continue;
 
 				if (seen_bet_size(seen_sizes, seen_count, bet_size))
@@ -252,14 +309,19 @@ int get_legal_actions(GameState state, int8_t* out_actions) {
 				seen_sizes[seen_count++] = bet_size;
 				out_actions[act++] = raise_actions[i];
 			}
+
+			int allin_size = get_bet_size_for_action(state, ALLIN);
+			if (g_allin_enabled && allin_size > call_size &&
+				!seen_bet_size(seen_sizes, seen_count, allin_size))
+				out_actions[act++] = ALLIN;
 		}
 	}
 	else {
 		int aggressive_actions[] = {B10, B25, B52, B100, B123};
-		int seen_sizes[5];
+		int seen_sizes[MAX_BET_SIZES + 1];
 		int seen_count = 0;
 
-		for (int i = 0; i < 5; i++) {
+		for (int i = 0; i < g_bet_count; i++) {
 			int bet_size = get_bet_size_for_action(state, aggressive_actions[i]);
 
 			if (bet_size <= 0)
@@ -271,6 +333,11 @@ int get_legal_actions(GameState state, int8_t* out_actions) {
 			seen_sizes[seen_count++] = bet_size;
 			out_actions[act++] = aggressive_actions[i];
 		}
+
+		int allin_size = get_bet_size_for_action(state, ALLIN);
+		if (g_allin_enabled && allin_size > 0 &&
+			!seen_bet_size(seen_sizes, seen_count, allin_size))
+			out_actions[act++] = ALLIN;
 	}
 
 	return act;
@@ -331,17 +398,23 @@ GameState apply_bet(GameState current_state, int action) {
 		case R4x:
 			next_state.raises_this_street += 1;
 			break;
+		case ALLIN:
+			if (has_outstanding_bet(current_state))
+				next_state.raises_this_street += 1;
+			break;
 		default:
 			printf("ERR: BAD ACTION IN APPLY_BET %d\n", action);
 			return next_state;
 	}
 	
-	if (next_state.active_player == 0) {
+	if (next_state.active_player == P1) {
 		next_state.p1_commit += bet_size;
+		next_state.p1_invested += bet_size;
 		next_state.p1_stack  -= bet_size;
 	}
 	else {
 		next_state.p2_commit += bet_size;
+		next_state.p2_invested += bet_size;
 		next_state.p2_stack  -= bet_size;
 	}
 
@@ -370,29 +443,49 @@ GameState apply_deal(GameState current_state, int card_idx) {
 	next_state.num_actions_this_street = 0;
 	next_state.last_action_was_fold = 0;
 
-	next_state.active_player = 0; //oop always acts first
+	next_state.active_player = P1; // OOP always acts first
 	
 	return next_state;
 }
 
 
-void action_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void action_node(
+	PublicNode* node,
+	GameState state,
+	int num_combos,
+	float* p1_reach,
+	float* p2_reach,
+	float* p1_util,
+	float* p2_util
+) {
 	int8_t legal_actions[MAX_LEGAL_ACTIONS];
 	uint8_t active = node->active_player;
 	int action_count = get_legal_actions(state, legal_actions);
 	ActionFrame* frame = push_action_frame(num_combos, action_count);
 	float* strategy;
-	float* action_expected_util;
+	float* p1_action_util;
+	float* p2_action_util;
 
+	if (active != state.active_player || action_count != node->num_children) {
+		memset(p1_util, 0, (size_t)num_combos * sizeof(float));
+		memset(p2_util, 0, (size_t)num_combos * sizeof(float));
+		printf("ERR: action node/state mismatch\n");
+		if (frame)
+			pop_action_frame();
+		return;
+	}
 	if (!frame) {
 		printf("ERR: action scratch alloc/depth failed\n");
 		return;
 	}
 
 	strategy = frame->strategy;
-	action_expected_util = frame->action_util;
-	memset(action_expected_util, 0, (size_t)action_count * (size_t)num_combos * sizeof(float));
-	memset(expected_util, 0, (size_t)num_combos * sizeof(float));
+	p1_action_util = frame->p1_action_util;
+	p2_action_util = frame->p2_action_util;
+	memset(p1_action_util, 0, (size_t)action_count * (size_t)num_combos * sizeof(float));
+	memset(p2_action_util, 0, (size_t)action_count * (size_t)num_combos * sizeof(float));
+	memset(p1_util, 0, (size_t)num_combos * sizeof(float));
+	memset(p2_util, 0, (size_t)num_combos * sizeof(float));
 
 	calculate_strategy(node->regret_sum, strategy, action_count, num_combos);
 
@@ -419,40 +512,49 @@ void action_node(PublicNode* node, GameState state, int num_combos, float* p1_re
 
 		GameState next_state = apply_bet(state, legal_actions[action]);
 
-		//we calculate utility on a per-action basis, per node
-		float* child_expected_util = &action_expected_util[action * num_combos];
-		dcfr(node->children[action], next_state, num_combos, next_p1_reach, next_p2_reach, child_expected_util);
-
-		/*
-		 * update utility, the child node is from perspective of next player so we must reverse it
-		 * expected_util[combo] += strategy[action][combo] * child_expected_util[combo]
-		 * we are getting the expected_util by the EV of the next node for our selected combos for the node (on a per action basis)
-		 * this is converted into the perspective of our node
-		 * we multiply it by strategy since we're choosing this action with this combo 100% of the time, only a certain broken down percentage
-		*/
-		for (int combo = 0; combo < num_combos; combo++) {
-			child_expected_util[combo] = -child_expected_util[combo];
-			expected_util[combo] += strategy[(action * num_combos) + combo] * child_expected_util[combo];
-		}
+		float* child_p1_util = &p1_action_util[action * num_combos];
+		float* child_p2_util = &p2_action_util[action * num_combos];
+		dcfr(
+			node->children[action],
+			next_state,
+			num_combos,
+			next_p1_reach,
+			next_p2_reach,
+			child_p1_util,
+			child_p2_util
+		);
 	}
 
 	/*
-	 * Update Regrets
-	 * regret = action EV for combo - average EV for combo
-	 * we update reaches since we're not hitting every combo 100% of the time
-	 * We update regret based on the chance the opponent will take an combo of an action
-	 * We update strategy based on the chance we'll perform a specific combo of an action
+	 * Each utility vector is indexed by that player's own private combo and
+	 * already integrates the compatible opponent reach. At the acting player's
+	 * node, weight child values by its strategy. For the non-acting player,
+	 * child utilities already include the acting player's action reach, so sum
+	 * them without applying the strategy a second time.
 	 */
+	for (int combo = 0; combo < num_combos; combo++) {
+		for (int action = 0; action < action_count; action++) {
+			int id = (action * num_combos) + combo;
+
+			if (active == P1) {
+				p1_util[combo] += strategy[id] * p1_action_util[id];
+				p2_util[combo] += p2_action_util[id];
+			}
+			else {
+				p1_util[combo] += p1_action_util[id];
+				p2_util[combo] += strategy[id] * p2_action_util[id];
+			}
+		}
+	}
+
 	for (int action = 0; action < action_count; action++) {
 		for (int combo = 0; combo < num_combos; combo++) {
 			int id = (action * num_combos) + combo;
+			float action_value = active == P1 ? p1_action_util[id] : p2_action_util[id];
+			float node_value = active == P1 ? p1_util[combo] : p2_util[combo];
+			float my_reach = active == P1 ? p1_reach[combo] : p2_reach[combo];
 
-			float regret = action_expected_util[id] - expected_util[combo];
-
-			float opp_reach = (active == 0) ? p2_reach[combo] : p1_reach[combo];
-			float my_reach  = (active == 0) ? p1_reach[combo] : p2_reach[combo];
-
-			node->regret_sum[id] += regret * opp_reach;
+			node->regret_sum[id] += action_value - node_value;
 			node->strategy_sum[id] += strategy[id] * my_reach;
 		}
 	}
@@ -460,33 +562,49 @@ void action_node(PublicNode* node, GameState state, int num_combos, float* p1_re
 	pop_action_frame();
 }
 
-void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void chance_node(
+	PublicNode* node,
+	GameState state,
+	int num_combos,
+	float* p1_reach,
+	float* p2_reach,
+	float* p1_util,
+	float* p2_util
+) {
 	ensure_combo_masks(num_combos);
 	init_combo_suit_permutations(num_combos);
-	memset(expected_util, 0, (size_t)num_combos * sizeof(float));
+	memset(p1_util, 0, (size_t)num_combos * sizeof(float));
+	memset(p2_util, 0, (size_t)num_combos * sizeof(float));
 
 	int physical_card_count = 52 - __builtin_popcountll(state.board);
 	float weight = physical_card_count ? 1.0f / (float)physical_card_count : 0.0f;
+#ifdef _OPENMP
 	int parallel = node->num_children > 4 && !omp_in_parallel();
+#endif
 
 	#pragma omp parallel if(parallel)
 	{
 		ChanceScratch* scratch = &chance_scratch;
-		float* child_expected_util;
+		float* p1_child_util;
+		float* p2_child_util;
 		float* next_p1_reach;
 		float* next_p2_reach;
-		float* local_util;
+		float* p1_local_util;
+		float* p2_local_util;
 
 		if (!ensure_chance_scratch(num_combos)) {
 			#pragma omp critical
 			printf("ERR: chance scratch alloc failed\n");
 		}
 		else {
-			child_expected_util = scratch->child_util;
+			p1_child_util = scratch->p1_child_util;
+			p2_child_util = scratch->p2_child_util;
 			next_p1_reach = scratch->next_p1;
 			next_p2_reach = scratch->next_p2;
-			local_util = scratch->local_util;
-			memset(local_util, 0, (size_t)num_combos * sizeof(float));
+			p1_local_util = scratch->p1_local_util;
+			p2_local_util = scratch->p2_local_util;
+			memset(p1_local_util, 0, (size_t)num_combos * sizeof(float));
+			memset(p2_local_util, 0, (size_t)num_combos * sizeof(float));
 
 			#pragma omp for schedule(dynamic)
 			for (int i = 0; i < node->num_children; i++) {
@@ -534,7 +652,8 @@ void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_re
 					num_combos,
 					next_p1_reach,
 					next_p2_reach,
-					child_expected_util
+					p1_child_util,
+					p2_child_util
 				);
 
 				for (int orbit_index = 0; orbit_index < orbit_size; orbit_index++) {
@@ -547,35 +666,104 @@ void chance_node(PublicNode* node, GameState state, int num_combos, float* p1_re
 							representative_suit
 						);
 
-						local_util[combo] += child_expected_util[canonical_combo] * util_scale;
+						p1_local_util[combo] += p1_child_util[canonical_combo] * util_scale;
+						p2_local_util[combo] += p2_child_util[canonical_combo] * util_scale;
 					}
 				}
 			}
 
 			#pragma omp critical
-			for (int combo = 0; combo < num_combos; combo++)
-				expected_util[combo] += local_util[combo];
+			for (int combo = 0; combo < num_combos; combo++) {
+				p1_util[combo] += p1_local_util[combo];
+				p2_util[combo] += p2_local_util[combo];
+			}
 		}
 	}
 }
 
-void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+static void compatible_reach_sums(
+	const float* reach,
+	uint64_t board,
+	int num_combos,
+	float* out
+) {
+	float total = 0.0f;
+	float by_card[52] = {0};
+
+	for (int combo = 0; combo < num_combos; combo++) {
+		uint64_t mask = combo_masks[combo];
+		float weight = reach[combo];
+
+		if (weight == 0.0f || combo_is_dead(mask, board))
+			continue;
+		total += weight;
+		for (int card = 0; card < 52; card++) {
+			int rank = card % 13;
+			int suit = card / 13;
+
+			if (mask & (1ULL << (rank + suit * 16)))
+				by_card[card] += weight;
+		}
+	}
+
+	for (int combo = 0; combo < num_combos; combo++) {
+		uint64_t mask = combo_masks[combo];
+		float compatible = total;
+
+		if (combo_is_dead(mask, board)) {
+			out[combo] = 0.0f;
+			continue;
+		}
+		for (int card = 0; card < 52; card++) {
+			int rank = card % 13;
+			int suit = card / 13;
+
+			if (mask & (1ULL << (rank + suit * 16)))
+				compatible -= by_card[card];
+		}
+		// The identical two-card combo was subtracted once for each card.
+		compatible += reach[combo];
+		out[combo] = compatible > 0.0f ? compatible : 0.0f;
+	}
+}
+
+void terminal_node(
+	GameState state,
+	int num_combos,
+	float* p1_reach,
+	float* p2_reach,
+	float* p1_util,
+	float* p2_util
+) {
 	ensure_combo_masks(num_combos);
 
-	//we're finally setting the EV
-	memset(expected_util, 0, num_combos * sizeof(float));	
+	memset(p1_util, 0, (size_t)num_combos * sizeof(float));
+	memset(p2_util, 0, (size_t)num_combos * sizeof(float));
 
-	//It's really simple if we have a fold, we're just counting commits
 	if (state.last_action_was_fold) {
+		float* p1_compatible = (float*)malloc((size_t)num_combos * sizeof(float));
+		float* p2_compatible = (float*)malloc((size_t)num_combos * sizeof(float));
+		float p1_payoff = state.active_player == P1
+			? -(float)state.p1_invested
+			: (float)state.p2_invested;
+
+		if (!p1_compatible || !p2_compatible) {
+			free(p1_compatible);
+			free(p2_compatible);
+			printf("ERR: terminal fold scratch alloc failed\n");
+			return;
+		}
+		compatible_reach_sums(p1_reach, state.board, num_combos, p1_compatible);
+		compatible_reach_sums(p2_reach, state.board, num_combos, p2_compatible);
+
 		for (int combo = 0; combo < num_combos; combo++) {
 			if (combo_is_dead(combo_masks[combo], state.board))
 				continue;
-
-			if (state.active_player == 0)
-				expected_util[combo] = -(float)state.p1_commit;
-			else
-				expected_util[combo] = -(float)state.p2_commit;
+			p1_util[combo] = p2_compatible[combo] * p1_payoff;
+			p2_util[combo] = p1_compatible[combo] * -p1_payoff;
 		}
+		free(p1_compatible);
+		free(p2_compatible);
 		return;
 	}
 
@@ -594,8 +782,6 @@ void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_r
 		if (combo_is_dead(combo_masks[p1c], state.board))
 			continue;
 
-		float ev = 0.0f;
-
 		for (int p2c = 0; p2c < num_combos; p2c++) {
 			if (p2_reach[p2c] == 0.0f)
 				continue;
@@ -608,29 +794,37 @@ void terminal_node(GameState state, int num_combos, float* p1_reach, float* p2_r
 
 			int p1_score = combo_scores[p1c];
 			int p2_score = combo_scores[p2c];
+			float p1_payoff =
+				((float)state.p2_invested - (float)state.p1_invested) * 0.5f;
 
 			if (p1_score > p2_score)
-				ev += p2_reach[p2c] * (float)state.p2_commit;
+				p1_payoff = (float)state.p2_invested;
 			else if (p2_score > p1_score)
-				ev -= p2_reach[p2c] * (float)state.p1_commit;
-		}
+				p1_payoff = -(float)state.p1_invested;
 
-		if (state.active_player == 0)
-			expected_util[p1c] = ev;
-		else
-			expected_util[p1c] = -ev;
+			p1_util[p1c] += p2_reach[p2c] * p1_payoff;
+			p2_util[p2c] += p1_reach[p1c] * -p1_payoff;
+		}
 	}
 }
 
 
 
-void dcfr(PublicNode* node, GameState state, int num_combos, float* p1_reach, float* p2_reach, float* expected_util) {
+void dcfr(
+	PublicNode* node,
+	GameState state,
+	int num_combos,
+	float* p1_reach,
+	float* p2_reach,
+	float* p1_util,
+	float* p2_util
+) {
 	if (node->type == NODE_ACTION)
-		action_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
+		action_node(node, state, num_combos, p1_reach, p2_reach, p1_util, p2_util);
 	else if (node->type == NODE_CHANCE)
-		chance_node(node, state, num_combos, p1_reach, p2_reach, expected_util);
+		chance_node(node, state, num_combos, p1_reach, p2_reach, p1_util, p2_util);
 	else if (node->type == NODE_TERMINAL)
-		terminal_node(state, num_combos, p1_reach, p2_reach, expected_util);
+		terminal_node(state, num_combos, p1_reach, p2_reach, p1_util, p2_util);
 }
 
 void discount_tree(PublicNode* node, int num_combos, int t, float alpha, float beta, float gamma) {

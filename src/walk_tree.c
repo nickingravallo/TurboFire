@@ -7,13 +7,19 @@
 #include <string.h>
 #include <time.h>
 
+// Soft JSONL is egocentric: <HOLE> is the actor, targets are HERO_*, and the
+// betting path is rewritten so the other seat is OPP_*. Solver seats (P1 OOP /
+// P2 IP) stay in the internal path only.
+
 static const char RANK_CHARS[] = "23456789TJQKA";
 static const char SUIT_CHARS[] = "shdc";
 static const float PROB_EPS = 1e-6f;
 
 // Diversity knobs (override with env):
 //   SOFT_MAX_DEPTH   - emit only paths with <= this many actions (default 1)
-//   SOFT_MAX_COMBOS  - max combos emitted per action node (default 96)
+//   SOFT_MAX_COMBOS  - max combos emitted per action node (default 96;
+//                      0 = every in-range combo, NashGPT 1.5)
+//   SEED             - reproducible combo sampling seed
 static int g_soft_max_depth = 1;
 static int g_soft_max_combos = 96;
 
@@ -34,12 +40,12 @@ static void shuffle_ints(int* arr, int n) {
 	}
 }
 
+// Internal path tags are seat-absolute (P1_/P2_). Dataset tokens are
+// HERO_/OPP_ relative to the hole-card holder at emit time.
 static int path_action_depth(const char* path) {
 	int depth = 0;
 	for (const char* p = path; *p; p++) {
-		if (p[0] == 'S' && p[1] == 'B' && p[2] == '_')
-			depth++;
-		else if (p[0] == 'B' && p[1] == 'B' && p[2] == '_')
+		if (p[0] == 'P' && (p[1] == '1' || p[1] == '2') && p[2] == '_')
 			depth++;
 	}
 	return depth;
@@ -149,13 +155,42 @@ static int has_outstanding_bet(GameState state) {
 	return state.p2_commit != state.p1_commit;
 }
 
-// P1 acts first (OOP) -> SB_; P2 is IP -> BB_ (dataset positional tags).
-static const char* actor_tag(int player) {
-	return player == P1 ? "SB_" : "BB_";
+// P1 = OOP (BB postflop), P2 = IP (BTN). Internal path only; not in JSONL.
+static const char* seat_tag(int player) {
+	return player == P1 ? "P1_" : "P2_";
 }
 
-static void append_taken_action(char* buf, size_t buf_size, GameState state, int player, int action) {
-	append_string(buf, buf_size, actor_tag(player));
+static const char* viewpoint_tag(int player, int hero) {
+	return player == hero ? "HERO_" : "OPP_";
+}
+
+// Rewrite P1_/P2_ action prefixes so the current actor is always HERO_.
+static void rewrite_path_for_hero(const char* path, int hero, char* out, size_t out_size) {
+	if (!out || out_size == 0)
+		return;
+
+	size_t n = 0;
+	for (const char* p = path; *p && n + 1 < out_size; ) {
+		if (p[0] == 'P' && (p[1] == '1' || p[1] == '2') && p[2] == '_') {
+			int player = p[1] == '1' ? P1 : P2;
+			const char* tag = viewpoint_tag(player, hero);
+			size_t tag_len = strlen(tag);
+			if (n + tag_len >= out_size)
+				break;
+			memcpy(out + n, tag, tag_len);
+			n += tag_len;
+			p += 3;
+			continue;
+		}
+		out[n++] = *p++;
+	}
+	out[n] = '\0';
+}
+
+static void append_taken_action(char* buf, size_t buf_size, GameState state, int action, const char* prefix) {
+	char size_token[32];
+
+	append_string(buf, buf_size, prefix);
 
 	switch (action) {
 		case FOLD:
@@ -165,28 +200,21 @@ static void append_taken_action(char* buf, size_t buf_size, GameState state, int
 			append_string(buf, buf_size, has_outstanding_bet(state) ? "CALL" : "CHECK");
 			break;
 		case B10:
-			append_string(buf, buf_size, "BET10");
-			break;
 		case B25:
-			append_string(buf, buf_size, "BET25");
-			break;
 		case B52:
-			append_string(buf, buf_size, "BET52");
-			break;
 		case B100:
-			append_string(buf, buf_size, "BET100");
-			break;
 		case B123:
-			append_string(buf, buf_size, "BET123");
+			snprintf(size_token, sizeof(size_token), "BET%g", (double)action_size_value(action));
+			append_string(buf, buf_size, size_token);
 			break;
 		case R2x:
-			append_string(buf, buf_size, "RAISE_2X");
-			break;
 		case R3x:
-			append_string(buf, buf_size, "RAISE_3X");
-			break;
 		case R4x:
-			append_string(buf, buf_size, "RAISE_4X");
+			snprintf(size_token, sizeof(size_token), "RAISE_%gX", (double)action_size_value(action));
+			append_string(buf, buf_size, size_token);
+			break;
+		case ALLIN:
+			append_string(buf, buf_size, "ALLIN");
 			break;
 		default:
 			break;
@@ -236,7 +264,7 @@ static void emit_soft_example(
 			continue;
 
 		action_names[kept][0] = '\0';
-		append_taken_action(action_names[kept], sizeof(action_names[kept]), state, actor, legal_actions[a]);
+		append_taken_action(action_names[kept], sizeof(action_names[kept]), state, legal_actions[a], "HERO_");
 		probs[kept] = p;
 		kept++;
 	}
@@ -251,7 +279,10 @@ static void emit_soft_example(
 	for (int i = 0; i < kept; i++)
 		probs[i] /= sum;
 
-	printf("{\"context\":\"<START> <HOLE> %s <FLOP> %s <BETTING>%s\",\"action_probs\":{", hole, flop, path);
+	char hero_path[1024];
+	rewrite_path_for_hero(path, actor, hero_path, sizeof(hero_path));
+
+	printf("{\"context\":\"<START> <HOLE> %s <FLOP> %s <BETTING>%s\",\"action_probs\":{", hole, flop, hero_path);
 	for (int i = 0; i < kept; i++) {
 		if (i > 0)
 			printf(",");
@@ -324,7 +355,7 @@ static void emit_soft_recursive(
 			char action_tok[16];
 
 			action_tok[0] = '\0';
-			append_taken_action(action_tok, sizeof(action_tok), state, actor, legal_actions[a]);
+			append_taken_action(action_tok, sizeof(action_tok), state, legal_actions[a], seat_tag(actor));
 			append_string(path, path_size, " ");
 			append_string(path, path_size, action_tok);
 
@@ -388,12 +419,21 @@ void walk_tree(
 
 	g_soft_max_depth = env_int("SOFT_MAX_DEPTH", 1);
 	g_soft_max_combos = env_int("SOFT_MAX_COMBOS", 96);
-	if (g_soft_max_combos < 1)
-		g_soft_max_combos = 1;
+	// 0 = emit every in-range combo (NashGPT 1.5).
+	if (g_soft_max_combos <= 0)
+		g_soft_max_combos = 1326;
 	if (g_soft_max_combos > 1326)
 		g_soft_max_combos = 1326;
 
-	srand((unsigned)time(NULL) ^ (unsigned)initial_state.board);
+	const char* seed_env = getenv("SEED");
+	unsigned seed = (unsigned)time(NULL);
+	if (seed_env && *seed_env) {
+		char* end = NULL;
+		unsigned long parsed = strtoul(seed_env, &end, 10);
+		if (end != seed_env && *end == '\0')
+			seed = (unsigned)parsed;
+	}
+	srand(seed ^ (unsigned)initial_state.board ^ (unsigned)(initial_state.board >> 32));
 
 	format_board_cards(initial_state.board, 3, flop, sizeof(flop));
 	path[0] = '\0';

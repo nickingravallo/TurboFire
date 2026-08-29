@@ -85,6 +85,135 @@ int main(void) {
 		}
 	}
 
+	{
+		uint8_t flops[NUM_CANONICAL_FLOPS][3];
+		int n = collect_canonical_flops(flops, NUM_CANONICAL_FLOPS);
+		uint8_t again[3];
+
+		assert(n == NUM_CANONICAL_FLOPS);
+		for (int i = 0; i < n; i++) {
+			assert(canonicalize_flop_cards(flops[i], again, NULL, NULL, NULL));
+			assert(again[0] == flops[i][0] && again[1] == flops[i][1] &&
+				again[2] == flops[i][2]);
+		}
+	}
+
+	for (int a = 0; a < 50; a++) {
+		for (int b = a + 1; b < 51; b++) {
+			for (int c = b + 1; c < 52; c++) {
+				uint8_t flop[3] = {(uint8_t)a, (uint8_t)b, (uint8_t)c};
+				uint8_t canon[3];
+				uint64_t board =
+					card_mask(a % 13, a / 13) |
+					card_mask(b % 13, b / 13) |
+					card_mask(c % 13, c / 13);
+
+				assert(canonicalize_flop_cards(flop, canon, NULL, NULL, NULL));
+				assert(canonicalize_flop_board(board) ==
+					(card_mask(canon[0] % 13, canon[0] / 13) |
+					 card_mask(canon[1] % 13, canon[1] / 13) |
+					 card_mask(canon[2] % 13, canon[2] / 13)));
+
+				for (int sa = 0; sa < 4; sa++) {
+					for (int sb = 0; sb < 4; sb++) {
+						int d;
+						int perm[4];
+						uint8_t mapped[3];
+						uint8_t mapped_canon[3];
+
+						if (sb == sa)
+							continue;
+						for (int sc = 0; sc < 4; sc++) {
+							if (sc == sa || sc == sb)
+								continue;
+							d = 6 - sa - sb - sc;
+							perm[0] = sa;
+							perm[1] = sb;
+							perm[2] = sc;
+							perm[3] = d;
+							for (int i = 0; i < 3; i++)
+								mapped[i] = (uint8_t)(perm[flop[i] / 13] * 13 + flop[i] % 13);
+							assert(canonicalize_flop_cards(
+								mapped, mapped_canon, NULL, NULL, NULL
+							));
+							assert(mapped_canon[0] == canon[0] &&
+								mapped_canon[1] == canon[1] &&
+								mapped_canon[2] == canon[2]);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	{
+		uint8_t boards[][3] = {
+			{12, 24, 28}, /* As Kh 4d  — rainbow */
+			{12, 11, 0},  /* As Ks 2s  — monotone */
+			{12, 11, 13}, /* As Ks 2h  — two-tone */
+		};
+
+		for (unsigned bi = 0; bi < sizeof(boards) / sizeof(boards[0]); bi++) {
+			uint8_t flop[3] = {boards[bi][0], boards[bi][1], boards[bi][2]};
+			int on_flop[52] = {0};
+
+			on_flop[flop[0]] = on_flop[flop[1]] = on_flop[flop[2]] = 1;
+			for (int h1 = 0; h1 < 51; h1++) {
+				if (on_flop[h1])
+					continue;
+				for (int h2 = h1 + 1; h2 < 52; h2++) {
+					uint8_t hole[2] = {(uint8_t)h1, (uint8_t)h2};
+					uint8_t canon_flop[3];
+					uint8_t canon_hole[2];
+
+					if (on_flop[h2])
+						continue;
+					assert(canonicalize_flop_cards(
+						flop, canon_flop, hole, canon_hole, NULL
+					));
+
+					for (int sa = 0; sa < 4; sa++) {
+						for (int sb = 0; sb < 4; sb++) {
+							int d;
+							int perm[4];
+
+							if (sb == sa)
+								continue;
+							for (int sc = 0; sc < 4; sc++) {
+								uint8_t mapped_flop[3];
+								uint8_t mapped_hole[2];
+								uint8_t out_flop[3];
+								uint8_t out_hole[2];
+
+								if (sc == sa || sc == sb)
+									continue;
+								d = 6 - sa - sb - sc;
+								perm[0] = sa;
+								perm[1] = sb;
+								perm[2] = sc;
+								perm[3] = d;
+								for (int i = 0; i < 3; i++)
+									mapped_flop[i] =
+										(uint8_t)(perm[flop[i] / 13] * 13 + flop[i] % 13);
+								for (int i = 0; i < 2; i++)
+									mapped_hole[i] =
+										(uint8_t)(perm[hole[i] / 13] * 13 + hole[i] % 13);
+								assert(canonicalize_flop_cards(
+									mapped_flop, out_flop, mapped_hole, out_hole, NULL
+								));
+								assert(out_flop[0] == canon_flop[0] &&
+									out_flop[1] == canon_flop[1] &&
+									out_flop[2] == canon_flop[2]);
+								assert(out_hole[0] == canon_hole[0] &&
+									out_hole[1] == canon_hole[1]);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	printf("isomorphism tests passed\n");
 	return 0;
 }
