@@ -1,0 +1,134 @@
+{
+  "elapsed_seconds": 20.019021541025722,
+  "method": {
+    "iterations": 1000,
+    "legal_profile": "nashgpt16",
+    "note": "Fresh TurboFire DCFR average strategies are solver references, not independently proven true GTO.",
+    "range": "condensed"
+  },
+  "results": [
+    {
+      "canonical_prompt": "<START> <HOLE> As Ks <FLOP> Qs Jh 7d <BETTING>",
+      "canonical_tvd": 0.027137303049832556,
+      "depth": 0,
+      "model_canonical": {
+        "HERO_ALLIN": 0.05630655214190483,
+        "HERO_BET100": 0.014311627484858036,
+        "HERO_BET40": 0.012662161141633987,
+        "HERO_CHECK": 0.9167197346687317
+      },
+      "model_raw": {
+        "HERO_ALLIN": 0.036302581429481506,
+        "HERO_BET100": 0.12158823758363724,
+        "HERO_BET40": 0.016580836847424507,
+        "HERO_CHECK": 0.8255283236503601
+      },
+      "name": "Broadway rainbow",
+      "raw_prompt": "<START> <HOLE> Ah Kh <FLOP> Qh Jd 7c <BETTING>",
+      "raw_tvd": 0.12740608467561004,
+      "solve_seconds": 3.817718292004429,
+      "solver_dcfr": {
+        "HERO_ALLIN": 0.04538,
+        "HERO_BET100": 0.009351,
+        "HERO_BET40": 0.001412,
+        "HERO_CHECK": 0.943857
+      }
+    },
+    {
+      "canonical_prompt": "<START> <HOLE> Jd 7d <FLOP> 9s 8s 6h <BETTING> OPP_CHECK",
+      "canonical_tvd": 0.1939677811919898,
+      "depth": 1,
+      "model_canonical": {
+        "HERO_ALLIN": 0.7431679368019104,
+        "HERO_BET100": 0.10930963605642319,
+        "HERO_BET40": 0.14141565561294556,
+        "HERO_CHECK": 0.0061067924834787846
+      },
+      "model_raw": {
+        "HERO_ALLIN": 0.5217813849449158,
+        "HERO_BET100": 0.24296748638153076,
+        "HERO_BET40": 0.025858789682388306,
+        "HERO_CHECK": 0.20939239859580994
+      },
+      "name": "Connected two-tone",
+      "raw_prompt": "<START> <HOLE> Jc 7c <FLOP> 9h 8h 6d <BETTING> OPP_CHECK",
+      "raw_tvd": 0.40610235517501836,
+      "solve_seconds": 4.060347749997163,
+      "solver_dcfr": {
+        "HERO_ALLIN": 0.925323,
+        "HERO_BET100": 0.028338,
+        "HERO_BET40": 0.02842,
+        "HERO_CHECK": 0.01792
+      }
+    },
+    {
+      "canonical_prompt": "<START> <HOLE> Jh 5h <FLOP> As 7s 2s <BETTING> HERO_CHECK OPP_BET40",
+      "canonical_tvd": 0.016951408597201095,
+      "depth": 2,
+      "model_canonical": {
+        "HERO_ALLIN": 0.04292752966284752,
+        "HERO_CALL": 0.012947442941367626,
+        "HERO_FOLD": 0.9319830536842346,
+        "HERO_RAISE_3X": 0.012141898274421692
+      },
+      "model_raw": {
+        "HERO_ALLIN": 0.06636770069599152,
+        "HERO_CALL": 0.10790403187274933,
+        "HERO_FOLD": 0.816140353679657,
+        "HERO_RAISE_3X": 0.009587925858795643
+      },
+      "name": "Ace-high monotone",
+      "raw_prompt": "<START> <HOLE> Js 5s <FLOP> Ah 7h 2h <BETTING> HERO_CHECK OPP_BET40",
+      "raw_tvd": 0.13279415237393974,
+      "solve_seconds": 4.066005000000587,
+      "solver_dcfr": {
+        "HERO_ALLIN": 0.029494,
+        "HERO_CALL": 0.012095,
+        "HERO_FOLD": 0.948935,
+        "HERO_RAISE_3X": 0.009477
+      }
+    },
+    {
+      "canonical_prompt": "<START> <HOLE> Jc Tc <FLOP> As Kh Qd <BETTING> OPP_CHECK HERO_BET40 OPP_RAISE_3X",
+      "canonical_tvd": 0.030241698026657104,
+      "depth": 3,
+      "model_canonical": {
+        "HERO_CALL": 0.5302416682243347,
+        "HERO_FOLD": 0.4697582721710205
+      },
+      "model_raw": {
+        "HERO_CALL": 0.9998499155044556,
+        "HERO_FOLD": 0.00015002023428678513
+      },
+      "name": "Broadway connected",
+      "raw_prompt": "<START> <HOLE> Js Ts <FLOP> Ah Kd Qc <BETTING> OPP_CHECK HERO_BET40 OPP_RAISE_3X",
+      "raw_tvd": 0.4998499476350844,
+      "solve_seconds": 4.026297291013179,
+      "solver_dcfr": {
+        "HERO_CALL": 0.5,
+        "HERO_FOLD": 0.5
+      }
+    },
+    {
+      "canonical_prompt": "<START> <HOLE> As Qs <FLOP> Kh Ks 4d <BETTING> HERO_CHECK OPP_ALLIN",
+      "canonical_tvd": 0.3173101308078766,
+      "depth": 2,
+      "model_canonical": {
+        "HERO_CALL": 0.389488160610199,
+        "HERO_FOLD": 0.6105118989944458
+      },
+      "model_raw": {
+        "HERO_CALL": 0.824018120765686,
+        "HERO_FOLD": 0.17598189413547516
+      },
+      "name": "Paired dry",
+      "raw_prompt": "<START> <HOLE> Ah Qh <FLOP> Kd Kh 4c <BETTING> HERO_CHECK OPP_ALLIN",
+      "raw_tvd": 0.7518401133151055,
+      "solve_seconds": 4.048287209006958,
+      "solver_dcfr": {
+        "HERO_CALL": 0.072178,
+        "HERO_FOLD": 0.927822
+      }
+    }
+  ]
+}

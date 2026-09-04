@@ -70,6 +70,7 @@ OUT="${OUT:-training_soft_nashgpt15_${RANGE_SLUG}.jsonl}"
 SEEN="${SEEN:-${OUT}.seen_flops}"
 SEED_FILE="${SEED_FILE:-${OUT}.seed}"
 FLOP_TMP="${OUT}.tmp"
+PENDING="${PENDING:-${OUT}.pending}"
 
 LCG_STATE=0
 LCG_RAND=0
@@ -108,6 +109,33 @@ file_size() {
 flop_seen() {
 	local flop="$1"
 	[[ -f "$SEEN" ]] && grep -Fxq "$flop" "$SEEN"
+}
+
+recover_pending_append() {
+	local pending_flop pending_size pending_seen_size
+
+	[[ -f "$PENDING" ]] || return
+	read -r pending_flop pending_size pending_seen_size < "$PENDING" || {
+		echo "error: invalid pending marker $PENDING" >&2
+		exit 1
+	}
+	if flop_seen "$pending_flop"; then
+		rm -f "$PENDING"
+		return
+	fi
+	if ! [[ "$pending_size" =~ ^[0-9]+$ && "$pending_seen_size" =~ ^[0-9]+$ ]]; then
+		echo "error: invalid recovery offset in $PENDING" >&2
+		exit 1
+	fi
+	echo "recovering interrupted append for $pending_flop at byte $pending_size" >&2
+	python3 - "$OUT" "$pending_size" "$SEEN" "$pending_seen_size" <<'PY'
+import os
+import sys
+
+os.truncate(sys.argv[1], int(sys.argv[2]))
+os.truncate(sys.argv[3], int(sys.argv[4]))
+PY
+	rm -f "$PENDING"
 }
 
 format_duration() {
@@ -154,6 +182,7 @@ printf '%s\n' "$SEED" > "$SEED_FILE"
 touch "$OUT"
 touch "$SEEN"
 trap 'rm -f "$FLOP_TMP"' EXIT
+recover_pending_append
 size="$(file_size "$OUT")"
 flops="$(wc -l < "$SEEN" | tr -d ' ')"
 remaining=$((TARGET_FLOPS - flops))
@@ -233,9 +262,12 @@ while (( flops < TARGET_FLOPS )); do
 		echo "error: no JSONL rows for $FLOP" >&2
 		exit 1
 	fi
+	seen_size="$(file_size "$SEEN")"
+	printf '%s %s %s\n' "$FLOP" "$size" "$seen_size" > "$PENDING"
 	cat "$FLOP_TMP" >> "$OUT"
 	rm -f "$FLOP_TMP"
 	echo "$FLOP" >> "$SEEN"
+	rm -f "$PENDING"
 
 	elapsed=$((SECONDS - flop_start))
 	SOLVED_THIS_SESSION=$((SOLVED_THIS_SESSION + 1))

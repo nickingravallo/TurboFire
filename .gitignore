@@ -2,21 +2,20 @@
 turbofire
 turbofire_turn
 turbofire_river
-tests/isomorphism_test
+/src/tests/isomorphism_test
+/src/tests/dcfr_test
 rangefinder/data/
 ranges/
 data/
 output/
 .cursor/
 .vscode/
-/AGENTS.md
-/CLAUDE.md
 obj/
 notes/
-llm/
 *.jsonl
 *.jsonl.seed
 *.jsonl.seen_flops
+*.jsonl.pending
 
 # Python
 __pycache__/
