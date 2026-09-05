@@ -3,26 +3,28 @@
 #include <unordered_map>
 #include <vector>
 
-std::unordered_map<std::string, double> hero = {
+#include "hands.hpp"
+
+const std::unordered_map<std::string, double> Hands::hero = {
 	{"99+", 1.0},
 	{"ATs+", 1.0},
 	{"KTs+", 1.0},
 	{"QJs+", 1.0}
 };
 
-std::unordered_map<std::string, double> villain = {
+const std::unordered_map<std::string, double> Hands::villain = {
 	{"99+", 1.0},
 	{"ATs+", 1.0},
 	{"KTs+", 1.0},
 	{"QJs+", 1.0}
 };
 
-std::unordered_map<char, int> cards = {
-	{'A', 0}, {'2', 1}, {'3', 2}, {'4', 3}, {'5', 4}, {'6', 5}, {'7', 6}, 
-	{'8', 7}, {'9', 8}, {'T', 9}, {'J', 10}, {'Q', 11}, {'K', 12}
+const std::unordered_map<char, int> Hands::cards = {
+	{'A', 0}, {'K', 1}, {'Q', 2}, {'J', 3}, {'T', 4}, {'9', 5}, {'8', 6}, 
+	{'7', 7}, {'6', 8}, {'5', 9}, {'4', 10}, {'3', 11}, {'2', 12}
 };
 
-std::vector<double> parse_range(const std::unordered_map<std::string, double>& range) {
+std::vector<double> Hands::parse_range(const std::unordered_map<std::string, double>& range) {
 	bool isExtendedRange;
 	bool isPair;
 	bool isSuited;
@@ -33,8 +35,6 @@ std::vector<double> parse_range(const std::unordered_map<std::string, double>& r
 	std::vector<double> out(169, 0.0f);
 	
 	//(0,0) = AA, (12, 12) = 22 
-	std::vector<std::vector<double>> rangemap(13, std::vector<double>(13, 0.0f));
-
 	for (const auto& [hand, freq] : range) {
 		std::cout << "Hand: " << hand << " freq: " << freq << "\n";
 
@@ -44,18 +44,19 @@ std::vector<double> parse_range(const std::unordered_map<std::string, double>& r
 		s1 = s2 = 0;
 
 		for (char c : hand) {
-			if (!s1)
-				s1 = c; continue;
-			if (!s2)
-				s2 = c; continue;
-			if (c == '+')
-				isExtendedRange = true;
+			if (!s1) 
+				{ s1 = c; continue; }
 			if (c == s1)
 				isPair = true;
+			if (!s2)
+				{ s2 = c; continue; }
+			if (c == '+')
+				isExtendedRange = true;
 			if (c == 's')
 				isSuited = true;
 		}
 	
+		std::cout << s1 << s2 << "<HAND\n";
 		int c1i = cards.at(s1);
 		int c2i = cards.at(s2);
 		/*  0  1  2  3  4
@@ -66,31 +67,32 @@ std::vector<double> parse_range(const std::unordered_map<std::string, double>& r
 		 */
 		int end_c1 = isExtendedRange ? 0 : c1i;
 		int end_c2 = isExtendedRange ? 0 : c2i;
+		std::cout << "HERE\n";
 		if (isPair)
 			for (int i = c1i; i >= end_c1; i--)
-				rangemap[i][i] = freq;		
+				out[(12*i)+i] = freq;		
 		else if (isSuited)
 			for (int i = c2i; i >= end_c2; i--)
-				rangemap[c1i][i] = freq;	
+				out[(12*c1i)-i] = freq;	
 		else
 			for (int i = c1i; i >= end_c1; i--)
-				rangemap[i][c2i] = freq;
+				out[(12*i)+c1i] = freq;
 	}
 
 	return out;
 }
 
-void show_range(std::vector<double> range)
+void Hands::show_range(std::vector<double> range)
 {
 	if (range.empty()) {
 		std::cout << "Range is NULL or empty!" << "\n";
 		return;
 	}
 
-	int nl = 0;
+	int nl = 1;
 	for (auto freq : range) {
 		std::cout << std::fixed << std::setprecision(2) << freq << " ";
-		if (nl == 12) {
+		if (nl == 13) {
 			std::cout << "\n"; 
 			nl = 0;
 		}

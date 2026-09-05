@@ -2,7 +2,13 @@
 #include <iostream>
 #include <unordered_map>
 
-extern std::unordered_map<std::string, double> hero; 
-extern std::unordered_map<std::string, double> villain; 
+class Hands {
+private:
+	static const std::unordered_map<char, int> cards;
+public:
+	static const std::unordered_map<std::string, double> hero; 
+	static const std::unordered_map<std::string, double> villain; 
 
-std::vector<double> parse_range(const std::unordered_map<std::string, double>& range);
+	static std::vector<double> parse_range(const std::unordered_map<std::string, double>& range);
+	static void show_range(std::vector<double> range);
+};
