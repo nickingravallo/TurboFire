@@ -7,9 +7,8 @@
 
 const std::unordered_map<std::string, double> Hands::hero = {
 	{"99+", 1.0},
-	{"ATs+", 1.0},
 	{"KTs+", 1.0},
-	{"QJs+", 1.0}
+	{"A7+", 0.95}
 };
 
 const std::unordered_map<std::string, double> Hands::villain = {
@@ -70,13 +69,13 @@ std::vector<double> Hands::parse_range(const std::unordered_map<std::string, dou
 		std::cout << "HERE\n";
 		if (isPair)
 			for (int i = c1i; i >= end_c1; i--)
-				out[(12*i)+i] = freq;		
+				out[(13*i)+i] = freq;		
 		else if (isSuited)
 			for (int i = c2i; i >= end_c2; i--)
-				out[(12*c1i)-i] = freq;	
+				out[(13*i)+c1i] = freq;	
 		else
-			for (int i = c1i; i >= end_c1; i--)
-				out[(12*i)+c1i] = freq;
+			for (int i = c2i; i >= end_c2; i--)
+				out[(13*c1i)+i] = freq;
 	}
 
 	return out;
