@@ -20,8 +20,19 @@ const std::unordered_map<std::string, double> Hands::villain = {
 
 const std::unordered_map<char, int> Hands::cards = {
 	{'A', 0}, {'K', 1}, {'Q', 2}, {'J', 3}, {'T', 4}, {'9', 5}, {'8', 6}, 
-	{'7', 7}, {'6', 8}, {'5', 9}, {'4', 10}, {'3', 11}, {'2', 12}
+	{'7', 7}, {'6', 8}, {'5', 9}, {'4', 10}, {'3', 11}, {'2', 12},
+
+	{'a', 0}, {'k', 1}, {'q', 2}, {'j', 3}, {'t', 4}
 };
+
+const std::unordered_map<char, int> Hands::suits = {
+	{'C', 0}, {'D', 1}, {'H', 2}, {'S', 3},
+	{'c', 0}, {'d', 1}, {'h', 2}, {'s', 3}
+};
+
+std::vector<double> parse_range_to_combos(std::vector<double> isorange) {
+	
+}
 
 std::vector<double> Hands::parse_range(const std::unordered_map<std::string, double>& range) {
 	bool isExtendedRange;
@@ -98,3 +109,22 @@ void Hands::show_range(std::vector<double> range)
 		nl++;
 	}
 }
+
+//WARNING: card_bit and get_mask_for_combo generated with AI. Used for creating a mask out of a combo, still testing.
+static inline std::uint64_t card_bit(int card) {
+	int rank = card % 13;
+	int suit = card / 13;
+	return 1ULL << (rank + suit * 16);
+}
+
+static inline std::uint64_t get_mask_for_combo(int combo_idx) {
+	if (combo_idx < 0 || combo_idx >= 1326) {
+		return 0;
+	}
+	int c1 = (int)floor((103.0 - sqrt(10609.0 - 8.0 * combo_idx)) / 2.0);
+	int row_start = c1 * (103 - c1) / 2;
+	int offset = combo_idx - row_start;
+	int c2 = c1 + 1 + offset;
+	return card_bit(c1) | card_bit(c2);
+}
+
