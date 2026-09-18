@@ -32,6 +32,26 @@ const std::unordered_map<char, int> Hands::suits = {
 	{'c', 0}, {'d', 1}, {'h', 2}, {'s', 3}
 };
 
+/*
+ * suited => sum(1, 12) => 78 * 4  = 312
+ * 2c2d 2c2h 2c2s
+ * 2d2h 2d2s
+ * 2h2s
+ * pair   =>               13 * 6  = 78 
+ * AcKd AcKh AcKs
+ * AdKc AdKh AdKs
+ * AhKc AhKd AhKs
+ * AsKc AsKd AsKs 
+ * suited =>               78 * 12 = 936
+ */
+int count_combos_for_hand(char c1, char c2, bool suited) {
+	if (suited)
+		return 6;
+	if (c1 != c2)
+		return 12;
+	return 4;
+}
+
 std::vector<double> parse_range_to_combos(std::vector<double> isorange) {
 	std::vector<double> out(1326, 0.0f);
 	return out;
