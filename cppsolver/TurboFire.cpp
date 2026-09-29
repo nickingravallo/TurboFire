@@ -6,10 +6,16 @@
 int main() {
 	auto hr = Hands::parse_range(Hands::hero);
 	auto vr = Hands::parse_range(Hands::villain);
-	
+
 	std::cout << "Hero range:\n";
 	Hands::show_range(hr);
 	std::cout << "Villain range:\n";
 	Hands::show_range(vr);
+		
+	std::vector<std::uint64_t> combos(1326, 0.0f);
+	//the uint64 (52bit in reality) value for each idx 
+	for (int i = 0; i <= 1326; i++) 
+		combos[i] = Hands::get_mask_for_combo(i);
+
 	return 0;
 }

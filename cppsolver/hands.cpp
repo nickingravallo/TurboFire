@@ -1,10 +1,3 @@
-#include <iostream>
-#include <iomanip>
-#include <unordered_map>
-#include <vector>
-#include <cstdint>
-#include <cmath>
-
 #include "hands.hpp"
 
 #define NUM_CARDS = 13;
@@ -55,11 +48,6 @@ int count_combos_for_hand(char c1, char c2, bool suited) {
 
 std::vector<double> parse_range_to_combos(std::vector<double> isorange) {
 	std::vector<double> out(1326, 0.0f);
-	
-
-	for (int i = 0; i < isorange.size(); i++) {
-
-	}
 	return out;
 }
 
@@ -132,23 +120,5 @@ void Hands::show_range(std::vector<double> range)
 		}
 		nl++;
 	}
-}
-
-//WARNING: card_bit and get_mask_for_combo generated with AI. Used for creating a mask out of a combo, still testing.
-static inline std::uint64_t card_bit(int card) {
-	int rank = card % 13;
-	int suit = card / 13;
-	return 1ULL << (rank + suit * 16);
-}
-
-static inline std::uint64_t get_mask_for_combo(int combo_idx) {
-	if (combo_idx < 0 || combo_idx >= 1326) {
-		return 0;
-	}
-	int c1 = (int)std::floor((103.0 - std::sqrt(10609.0 - 8.0 * combo_idx)) / 2.0);
-	int row_start = c1 * (103 - c1) / 2;
-	int offset = combo_idx - row_start;
-	int c2 = c1 + 1 + offset;
-	return card_bit(c1) | card_bit(c2);
 }
 
