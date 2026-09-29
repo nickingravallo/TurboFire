@@ -7,6 +7,9 @@
 
 #include "hands.hpp"
 
+#define NUM_CARDS = 13;
+#define NUM_SUITS = 4;
+
 const std::unordered_map<std::string, double> Hands::hero = {
 	{"99+", 1.0},
 	{"KTs+", 1.0},
@@ -21,15 +24,13 @@ const std::unordered_map<std::string, double> Hands::villain = {
 };
 
 const std::unordered_map<char, int> Hands::cards = {
-	{'A', 0}, {'K', 1}, {'Q', 2}, {'J', 3}, {'T', 4}, {'9', 5}, {'8', 6}, 
-	{'7', 7}, {'6', 8}, {'5', 9}, {'4', 10}, {'3', 11}, {'2', 12},
-
-	{'a', 0}, {'k', 1}, {'q', 2}, {'j', 3}, {'t', 4}
+	{'A', 12}, {'K', 11}, {'Q', 10}, {'J', 9}, {'T', 8}, {'9', 7}, {'8', 6}, 
+	{'7', 5}, {'6', 4}, {'5', 3}, {'4', 2}, {'3', 1}, {'2', 0},
 };
 
+//in OMP -> s=0, h=1, d=2, c=3
 const std::unordered_map<char, int> Hands::suits = {
-	{'C', 0}, {'D', 1}, {'H', 2}, {'S', 3},
-	{'c', 0}, {'d', 1}, {'h', 2}, {'s', 3}
+	{'C', 3}, {'D', 2}, {'H', 1}, {'S', 0},
 };
 
 /*
@@ -54,6 +55,11 @@ int count_combos_for_hand(char c1, char c2, bool suited) {
 
 std::vector<double> parse_range_to_combos(std::vector<double> isorange) {
 	std::vector<double> out(1326, 0.0f);
+	
+
+	for (int i = 0; i < isorange.size(); i++) {
+
+	}
 	return out;
 }
 
@@ -67,7 +73,6 @@ std::vector<double> Hands::parse_range(const std::unordered_map<std::string, dou
 
 	std::vector<double> out(169, 0.0f);
 	
-	//(0,0) = AA, (12, 12) = 22 
 	for (const auto& [hand, freq] : range) {
 		std::cout << "Hand: " << hand << " freq: " << freq << "\n";
 
@@ -90,26 +95,22 @@ std::vector<double> Hands::parse_range(const std::unordered_map<std::string, dou
 		}
 	
 		std::cout << s1 << s2 << "<HAND\n";
-		int c1i = cards.at(s1);
-		int c2i = cards.at(s2);
-		/*  0  1  2  3  4
-		 *0 AA AK AQ AJ AT A9...
-		 *1 AK KK
-		 *2 AQ   QQ
-		 *3 AJ      JJ
-		 */
+		int c1i = 12 - cards.at(s1);
+		int c2i = 12 - cards.at(s2);
+
 		int end_c1 = isExtendedRange ? 0 : c1i;
-		int end_c2 = isExtendedRange ? 0 : c2i;
+		int end_c2 = isExtendedRange ? (c1i + 1) : c2i;
+		
 		std::cout << "HERE\n";
 		if (isPair)
 			for (int i = c1i; i >= end_c1; i--)
-				out[(13*i)+i] = freq;		
+				out[(13 * i) + i] = freq;		
 		else if (isSuited)
 			for (int i = c2i; i >= end_c2; i--)
-				out[(13*i)+c1i] = freq;	
+				out[(13 * i) + c1i] = freq;	
 		else
 			for (int i = c2i; i >= end_c2; i--)
-				out[(13*c1i)+i] = freq;
+				out[(13 * c1i) + i] = freq;
 	}
 
 	return out;
