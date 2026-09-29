@@ -7,7 +7,18 @@
 #include <cstdint>
 #include <cmath>
 
-class Solver {
-	public:
-		void train(std::vector<std::uint64_t> combos);
-}
+#define FLOP  0
+#define TURN  1
+#define RIVER 2
+
+#define P1 0
+#define P2 1
+
+struct GameState {
+	int street;
+	int pot;
+	int p1commit;
+	int p2commit;
+	int p1stack;
+	int p2stack;
+};
