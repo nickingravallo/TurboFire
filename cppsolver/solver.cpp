@@ -22,29 +22,34 @@ void solve(GameState state, int active, std::vector<float> reachp1, std::vector<
 }
 
 //we should store regret as [actions][combos]
+//each action[] has an infoset for a given combo
+//note that combos is a less generalized form of "infoset"
 std::vector<double> get_strategy(int legal_actions, int num_combos, const std::vector<double>& regret) {
-	vector<double> a(legal_actions * num_combos);
-	vector<double> rsum(num_combos, 0);
+	std::vector<double> strategy(legal_actions * num_combos, 0.0);
+	std::vector<double> rsum(num_combos, 0.0); //positive regret sum per combo over A (all actions a)
 
 	for (int i = 0; i < legal_actions; i++) {
 		for (int j = 0; j < num_combos; j++) {
-			int c = (i*num_combos) + j;
-			double r = regret[c];
-			a[c] += r;
+			int regret_i = (i*num_combos) + j;
+			double r = std::max(0.0, regret[regret_i]);
+			strategy[regret_i] = r;
 			rsum[j] += r;
 		}
 	}
 
-	//todo fix
+	//negative regret for all a in A over infoset I means we have evenly distributed strategy across all actions
+	const double normalized_strat = 1.0 / legal_actions; 
+
 	for (int i = 0; i < legal_actions; i++) {
 		for (int j = 0; j < num_combos; j++) {
-			int r = (num_actions * i) + j;
-			if (rsum <= 0)
-				a[r] = 1 / rsum;
+			int regret_i = (num_combos * i) + j;
+			double rsum_val = rsum[j]; //for infoset
+			if (rsum_val <= 0)
+				strategy[regret_i] = normalized_strat; 
 			else
-				a[r] = a[r] / strategy_sum;
+				strategy[regret_i] = strategy[regret_i] / rsum_val;
 		}
 	}
 
-	return a;
+	return strategy;
 }

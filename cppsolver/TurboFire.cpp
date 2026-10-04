@@ -1,6 +1,6 @@
 #include <iostream>
 #include "hands.hpp"
-#include "solver.cpp"
+#include "solver.hpp"
 
 //g++ -std=c++17 TurboFire.cpp hands.cpp -o turbofire
 

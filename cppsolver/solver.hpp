@@ -22,3 +22,5 @@ struct GameState {
 	int p1stack;
 	int p2stack;
 };
+
+void train(std::vector<float> p1combos, std::vector<float> p2combos);
