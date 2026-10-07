@@ -14,7 +14,10 @@
 #define P1 0
 #define P2 1
 
+//may pack tighter in the future, for now this works well enough 
 struct GameState {
+	std::uint64_t board;
+	int last_action;
 	int street;
 	int pot;
 	int p1commit;

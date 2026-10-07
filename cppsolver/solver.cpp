@@ -3,6 +3,8 @@
 
 void train(std::vector<float> p1combos, std::vector<float> p2combos) {
 	GameState state{
+		.board    = 0,
+		.paction  = 0,
 		.street   = FLOP,
 		.pot      = 100,
 		.p1commit = 0,
@@ -23,23 +25,36 @@ void solve(GameState state, int active, int num_combos, std::vector<float> reach
 }
 
 //i figured it was easier to do terminal first
-std::vector<float> do_terminal(GameState state, int traverser, std::vector<float> reachp1, std::vector<float> reachp2) {
-	std::vector<float> payoff(1326, 0.0);
+std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
+	//counterfactual represents how well we perform assuming we got here vs weighted sum of opponents range's payoffs
+	std::vector<float> cf(1326, 0.0);
+
 	for (int p1 = 0; i < reachp1.size(); i++) {
 		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
 		for (int p2 = 0; i < reachp2.size(); i++) {
+			int po = 0;
 			std::uint64_t p2h == Hands::get_mask_for_combo(p2);
 			//we cant be blocking cards
 			if (p1h & p2h)
 				continue;
-			int w = get_winner(p1h, p2h);
+			int evalp1 = evaluate_board(p1h, state.board);
+			int evalp2 = evaluate_board(p2h, state.board);
+			
+			if (traverser == P1)
+				cf[p1] += reachp2[p2] * payoff(state, evalp1, evalp2);
+			else
+				cf[p1] += reachp1[p2] * payoff(state, evalp1, evalp2);
 			
 		}
 	}
 }
 
-int get_winner(std::uint64_t p1h, std::uint64_t p2h) {
-
+int payoff(GameState state, int p1, int p2) {
+	if (p1 > p2)
+		return state.pot/2;
+	if (p2 > p1)
+		return -state.pot/2;
+	return 0; 
 }
 
 //we should store regret as [actions][combos]
