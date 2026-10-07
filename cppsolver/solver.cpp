@@ -1,4 +1,5 @@
 #include "solver.hpp"
+#include "hands.hpp"
 
 void train(std::vector<float> p1combos, std::vector<float> p2combos) {
 	GameState state{
@@ -21,8 +22,25 @@ void solve(GameState state, int active, int num_combos, std::vector<float> reach
 	//update local regret in a given node
 }
 
+//i figured it was easier to do terminal first
+std::vector<float> do_terminal(GameState state, int traverser, std::vector<float> reachp1, std::vector<float> reachp2) {
+	std::vector<float> payoff(1326, 0.0);
+	for (int p1 = 0; i < reachp1.size(); i++) {
+		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
+		for (int p2 = 0; i < reachp2.size(); i++) {
+			std::uint64_t p2h == Hands::get_mask_for_combo(p2);
+			//we cant be blocking cards
+			if (p1h & p2h)
+				continue;
+			int w = get_winner(p1h, p2h);
+			
+		}
+	}
+}
 
-std::vector<float> do_terminal(GameState state, std::vector<float> reachp1, std::vector<float> reachp2); 
+int get_winner(std::uint64_t p1h, std::uint64_t p2h) {
+
+}
 
 //we should store regret as [actions][combos]
 //each action[] has an infoset for a given combo
