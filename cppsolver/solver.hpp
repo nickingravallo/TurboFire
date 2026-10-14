@@ -14,10 +14,16 @@
 #define P1 0
 #define P2 1
 
+#define FOLD  0
+#define CALL  1
+#define CHECK 1 
+#define RAISE 2
+
 //may pack tighter in the future, for now this works well enough 
 struct GameState {
 	std::uint64_t board;
-	int last_action;
+	int active;
+	int prev_act;
 	int street;
 	int pot;
 	int p1commit;

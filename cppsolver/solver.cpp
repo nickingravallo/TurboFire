@@ -4,20 +4,22 @@
 void train(std::vector<float> p1combos, std::vector<float> p2combos) {
 	GameState state{
 		.board    = 0,
-		.paction  = 0,
+		.active   = P1,
 		.street   = FLOP,
 		.pot      = 100,
 		.p1commit = 0,
 		.p2commit = 0,
 		.p1stack  = 0,
-		.p2stack  = 0
+		.p2stack  = 0,
+		.prev_act = 0
 	};
 
 	
 }
 
-void solve(GameState state, int active, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
+void solve(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	//first we need strategy -> strategy is built from regret
+	std::vector<float> strategy(num_combos, 0.0f);
 	//then we need legal actions
 	//we iterate over legal actions and traverse each node 
 	//get regret from expected util from it
@@ -27,15 +29,29 @@ void solve(GameState state, int active, int num_combos, std::vector<float> reach
 //i figured it was easier to do terminal first
 std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	//counterfactual represents how well we perform assuming we got here vs weighted sum of opponents range's payoffs
-	std::vector<float> cf(1326, 0.0);
+	std::vector<float> cf(num_combos, 0.0);
+	int vill = traverser == P1 ? P2 : P1; 
+	//note: current active player DID NOT FOLD
+	//obv psuedo code that doesnt compile it needs to return a vector
+	if (state.prev_act == FOLD) {
+		//todo - cleanup
+		if (state.active == P1 && vill == P1) //hero fold, vill win hero commit
+			return -state.p2commit;	
+		if (state.active == P1 && vill == P2) //vill fold, hero win vill commit 
+			return state.p2commit;
+		if (state.active == P2 && vill == P1) //vill fold, hero win vill commit
+			return state.p1commit;
+		if (state.active == P2 && vill == P2) //hero fold, vill win hero commit
+			return -state.p1commit;
+	}
 
 	for (int p1 = 0; i < reachp1.size(); i++) {
 		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
 		for (int p2 = 0; i < reachp2.size(); i++) {
 			int po = 0;
 			std::uint64_t p2h == Hands::get_mask_for_combo(p2);
-			//we cant be blocking cards
-			if (p1h & p2h)
+			//we cant be blocking cards 
+			if (p1h & p2h || (p1h & p2h) & state.board)
 				continue;
 			int evalp1 = evaluate_board(p1h, state.board);
 			int evalp2 = evaluate_board(p2h, state.board);
