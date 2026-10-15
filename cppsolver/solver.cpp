@@ -26,24 +26,15 @@ void solve(GameState state, int traverser, int num_combos, std::vector<float> re
 	//update local regret in a given node
 }
 
+
 //i figured it was easier to do terminal first
 std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
-	//counterfactual represents how well we perform assuming we got here vs weighted sum of opponents range's payoffs
 	std::vector<float> cf(num_combos, 0.0);
 	int vill = traverser == P1 ? P2 : P1; 
 	//note: current active player DID NOT FOLD
 	//obv psuedo code that doesnt compile it needs to return a vector
-	if (state.prev_act == FOLD) {
-		//todo - cleanup
-		if (state.active == P1 && vill == P1) //hero fold, vill win hero commit
-			return -state.p2commit;	
-		if (state.active == P1 && vill == P2) //vill fold, hero win vill commit 
-			return state.p2commit;
-		if (state.active == P2 && vill == P1) //vill fold, hero win vill commit
-			return state.p1commit;
-		if (state.active == P2 && vill == P2) //hero fold, vill win hero commit
-			return -state.p1commit;
-	}
+	if (state.prev_act == FOLD) 
+		return cf;
 
 	for (int p1 = 0; i < reachp1.size(); i++) {
 		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
@@ -55,7 +46,9 @@ std::vector<float> do_terminal(GameState state, int traverser, int num_combos, s
 				continue;
 			int evalp1 = evaluate_board(p1h, state.board);
 			int evalp2 = evaluate_board(p2h, state.board);
-			
+		
+			//counterfactual value - assume we always get here
+			//get how we do vs villains entire range
 			if (traverser == P1)
 				cf[p1] += reachp2[p2] * payoff(state, evalp1, evalp2);
 			else
@@ -63,6 +56,38 @@ std::vector<float> do_terminal(GameState state, int traverser, int num_combos, s
 			
 		}
 	}
+
+	return cf;
+}
+
+inline std::vector<float> handle_fold(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
+	std::vector<float> cf(num_combos, 0.0);
+	int vill = traverser == P1 ? P2 : P1; 
+	auto reachvill = traverser == P1 ? reachp2 : reachp1; 
+	int po = 0;
+
+	if (state.active == P1 && vill == P1) //hero fold, vill win hero commit
+		po = -state.p2commit;	
+	if (state.active == P1 && vill == P2) //vill fold, hero win vill commit 
+		po = state.p2commit;
+	if (state.active == P2 && vill == P1) //vill fold, hero win vill commit
+		po = state.p1commit;
+	if (state.active == P2 && vill == P2) //hero fold, vill win hero commit
+		po = -state.p1commit;
+
+	for (int p1 = 0; i < reachp1.size(); i++) {
+		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
+		for (int p2 = 0; i < reachp2.size(); i++) {
+			int po = 0;
+			std::uint64_t p2h == Hands::get_mask_for_combo(p2);
+			//we cant be blocking cards 
+			if (p1h & p2h || (p1h & p2h) & state.board)
+				continue;
+			reachvill[p1] = po;
+		}
+	}
+
+	return cf;
 }
 
 int payoff(GameState state, int p1, int p2) {
