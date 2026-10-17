@@ -44,6 +44,6 @@ class Solver {
 		static std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
 
 		static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret);
-		static int payoff(GameState state, int p1, int p2); 
+		static int payoff(GameState state, int p1, int p2, int trav); 
 };
 

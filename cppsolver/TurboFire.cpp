@@ -3,7 +3,7 @@
 #include "solver.hpp"
 
 /*
-g++ -std=c++17 TurboFire.cpp solver.cpp hands.cpp evaluator.cpp -o turbofire
+g++ -std=c++17 TurboFire.cpp solver.cpp hands.cpp evaluator.cpp omp/HandEvaluator.cpp -o turbofire
 */
 
 int main() {

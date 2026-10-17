@@ -29,7 +29,7 @@ void Solver::solve(GameState state, int traverser, int num_combos, std::vector<f
 //i figured it was easier to do terminal first
 std::vector<float> Solver::do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	std::vector<float> cf(num_combos, 0.0);
-	int vill = traverser == P1 ? P2 : P1; 
+	int vill = traverser == P1 ? P2 : P1;
 	//note: current active player DID NOT FOLD
 	if (state.prev_act == FOLD) 
 		return handle_fold(state, traverser, num_combos, reachp1, reachp2);
@@ -39,18 +39,17 @@ std::vector<float> Solver::do_terminal(GameState state, int traverser, int num_c
 		for (int p2 = 0; p2 < reachp2.size(); p2++) {
 			std::uint64_t p2h = Hands::get_mask_for_combo(p2);
 			//we cant be blocking cards 
-			if ((p1h & p2h) || ((p1h & p2h) & state.board))
+			if ((p1h & p2h) || ((p1h | p2h) & state.board))
 				continue;
 			int evalp1 = evaluate_board(p1h, state.board);
 			int evalp2 = evaluate_board(p2h, state.board);
-		
-			//counterfactual value - assume we always get here
-			//get how we do vs villains entire range
-			if (traverser == P1)
-				cf[p1] += reachp2[p2] * payoff(state, evalp1, evalp2);
+
+			//ev would be ev[p1] * hero_reach[x] * vill_reach[y] * payoff but we assume hero always gets here
+			//P1 hero
+			if (vill == P2)
+				cf[p1] += reachp2[p2] * payoff(state, evalp1, evalp2, P1);
 			else
-				cf[p1] += reachp1[p2] * payoff(state, evalp1, evalp2);
-			
+				cf[p2] += reachp1[p1] * payoff(state, evalp1, evalp2, P2);
 		}
 	}
 
@@ -77,7 +76,7 @@ inline std::vector<float> Solver::handle_fold(GameState state, int traverser, in
 		for (int p2 = 0; p2 < reachp2.size(); p2++) {
 			std::uint64_t p2h = Hands::get_mask_for_combo(p2);
 			//we cant be blocking cards 
-			if ((p1h & p2h) || ((p1h & p2h) & state.board))
+			if ((p1h & p2h) || ((p1h | p2h) & state.board))
 				continue;
 			cf[p1] += po * reachvill[p2];
 		}
@@ -86,12 +85,15 @@ inline std::vector<float> Solver::handle_fold(GameState state, int traverser, in
 	return cf;
 }
 
-int Solver::payoff(GameState state, int p1, int p2) {
+int Solver::payoff(GameState state, int p1, int p2, int trav) {
+	int p = 0;
+	//this assumes p1 perspective
 	if (p1 > p2)
-		return state.pot/2;
-	if (p2 > p1)
-		return -state.pot/2;
-	return 0; 
+		p = state.pot/2;
+	else if (p2 > p1)
+		p = -state.pot/2;
+
+	return trav == P1 ? p : -p;
 }
 
 //we should store regret as [actions][combos]
