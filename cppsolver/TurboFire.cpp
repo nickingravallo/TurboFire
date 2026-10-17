@@ -1,8 +1,10 @@
 #include <iostream>
 #include "hands.hpp"
 #include "solver.hpp"
-#include 
-//g++ -std=c++17 TurboFire.cpp hands.cpp -o turbofire
+
+/*
+g++ -std=c++17 TurboFire.cpp solver.cpp hands.cpp evaluator.cpp -o turbofire
+*/
 
 int main() {
 	auto hr = Hands::parse_range(Hands::hero);
@@ -21,7 +23,7 @@ int main() {
 		p2combos[i] = 1;
 	}
 
-	train(p1combos, p2combos);
+	Solver::train(p1combos, p2combos);
 
 	return 0;
 }

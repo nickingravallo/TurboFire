@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstdint>
 #include <cmath>
+#include <algorithm>
 
 #define FLOP  0
 #define TURN  1
@@ -32,4 +33,17 @@ struct GameState {
 	int p2stack;
 };
 
-void train(std::vector<float> p1combos, std::vector<float> p2combos);
+class Solver {
+	private:
+		static inline std::vector<float> handle_fold(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
+	public:
+		static void train(std::vector<float> p1combos, std::vector<float> p2combos);
+
+		static void solve(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
+
+		static std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
+
+		static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret);
+		static int payoff(GameState state, int p1, int p2); 
+};
+

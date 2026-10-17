@@ -16,7 +16,7 @@ class Hands {
 
 		static std::vector<double> parse_range(const std::unordered_map<std::string, double>& range);
 		static void show_range(std::vector<double> range);
-		static __attribute__((always_inline)) std::uint64_t card_bit(int card) {
+		static inline __attribute__((always_inline)) std::uint64_t card_bit(int card) {
 			int rank = card % 13;
 			int suit = card / 13;
 			return 1ULL << (rank + suit * 16);
