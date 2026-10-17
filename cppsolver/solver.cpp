@@ -34,7 +34,7 @@ std::vector<float> do_terminal(GameState state, int traverser, int num_combos, s
 	//note: current active player DID NOT FOLD
 	//obv psuedo code that doesnt compile it needs to return a vector
 	if (state.prev_act == FOLD) 
-		return cf;
+		return handle_fold(state, traverser, num_combos, reachp1, reachp2);
 
 	for (int p1 = 0; i < reachp1.size(); i++) {
 		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
