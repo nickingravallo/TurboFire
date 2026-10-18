@@ -15,10 +15,14 @@
 #define P1 0
 #define P2 1
 
+#define NONE -1
 #define FOLD  0
+#define PASS  1 //"passive"
 #define CALL  1
 #define CHECK 1 
 #define RAISE 2
+
+#define MAX_RAISES 2
 
 //may pack tighter in the future, for now this works well enough 
 struct GameState {
@@ -31,6 +35,12 @@ struct GameState {
 	int p2commit;
 	int p1stack;
 	int p2stack;
+	int raises;
+};
+
+struct Node {
+	std::vector<double> regret_sum;
+	std::vector<double> strategy_sum;
 };
 
 class Solver {
@@ -43,6 +53,7 @@ class Solver {
 
 		static std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
 
+		static std::vector<int> get_legal_actions(const GameState& state); 
 		static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret);
 		static int payoff(GameState state, int p1, int p2, int trav); 
 };

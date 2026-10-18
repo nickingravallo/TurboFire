@@ -6,21 +6,24 @@ void Solver::train(std::vector<float> p1combos, std::vector<float> p2combos) {
 	GameState state{
 		.board    = 0,
 		.active   = P1,
-		.prev_act = 0,
+		.prev_act = -1,
 		.street   = FLOP,
 		.pot      = 100,
 		.p1commit = 0,
 		.p2commit = 0,
 		.p1stack  = 0,
-		.p2stack  = 0
+		.p2stack  = 0,
+		.raises   = 0
 	};
 }
 
-void Solver::solve(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
+void Solver::solve(GameState state, Node node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	//first we need strategy -> strategy is built from regret
-	std::vector<float> strategy(num_combos, 0.0f);
+	auto strategy = get_strategy(legal, num_combos, node.regret);
 	//then we need legal actions
+	auto legal_actions = get_legal_actions(state);
 	//we iterate over legal actions and traverse each node 
+		
 	//get regret from expected util from it
 	//update local regret in a given node
 }
@@ -94,6 +97,37 @@ int Solver::payoff(GameState state, int p1, int p2, int trav) {
 		p = -state.pot/2;
 
 	return trav == P1 ? p : -p;
+}
+
+/*
+TODO - WE NEED TO DO CHIP CHECKING! 
+ */
+//check / call same value as they are the passive action
+std::vector<int> Solver::get_legal_actions(const GameState& state) {
+	std::vector<int> actions;
+	//passive action always an option
+	actions.push_back(PASS);
+	//first to act
+	if (state.prev_act == NONE || state.prev_act == PASS) {
+		if (state.raises < MAX_RAISES) 
+			actions.push_back(RAISE);
+		return actions;
+	}
+
+	if (state.prev_act == RAISE) {
+		actions.push_back(FOLD);
+		if (state.raises < MAX_RAISES) 
+			actions.push_back(RAISE);		
+		return actions;
+	}
+
+	if (state.prev_act == FOLD) {
+		std::cout << "state.prev_act was fold in get_legal_actions. BAD!\n";
+		return actions;
+	}
+
+	std::cout << "state.prev_act out of band, really bad!\n";
+	return actions;
 }
 
 //we should store regret as [actions][combos]
