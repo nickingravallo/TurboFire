@@ -55,6 +55,9 @@ std::vector<float> Solver::do_action(GameState state, Node& node, int traverser,
 	return cf_new; 
 }
 
+//note that commit is a RUNNING TALLY
+//TODO - fix, we need several improvements here...
+//raises are 2.5x, bet is 50% for now
 GameState Solver::next_state(GameState prev, int action) {
 	auto next = prev;
 	auto& active_commit   = prev.active == P1 ? prev.p1commit : prev.p2commit;
@@ -64,8 +67,8 @@ GameState Solver::next_state(GameState prev, int action) {
 
 	next.active = prev.active == P1 ? P2 : P1;
 	next.prev_act = action;
-	auto next_commit = next.active == P1 ? next.p1commit : next.p2commit; 
-	auto next_stack  = next.stack  == P1 ? next.p1stack  : next.p2stack; 
+	auto& next_commit = next.active == P1 ? next.p1commit : next.p2commit; 
+	auto& next_stack  = next.stack  == P1 ? next.p1stack  : next.p2stack; 
 
 	if (action == RAISE) {
 		bool is_bet_not_raise = prev.prev_act != RAISE && action == RAISE;
