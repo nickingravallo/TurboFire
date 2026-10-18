@@ -17,18 +17,42 @@ void Solver::train(std::vector<float> p1combos, std::vector<float> p2combos) {
 	};
 }
 
-void Solver::solve(GameState state, Node node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
+std::vector<float> Solver::solve(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2, std::vector<float> cf) {
+	/*
+	if (node.type == ACTION)
+		return do_action();
+	if (node.type == CHANCE) 
+		return do_chance();
+	if (node.type == TERMINAL)
+		return do_terminal();
+	*/
+}
+
+std::vector<float> Solver::do_action(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2, std::vector<float> cf) {
+	std::vector<float> cf_new;
 	//first we need strategy -> strategy is built from regret
+	//array size [legal_actions][num_combos]
 	auto strategy = get_strategy(legal, num_combos, node.regret);
 	//then we need legal actions
 	auto legal_actions = get_legal_actions(state);
 	//we iterate over legal actions and traverse each node 
+	for (auto action : legal_actions) {
+		auto next_p1reach = reachp1;
+		auto next_p2reach = reachp2;
+		auto& act_reach = state.active == P1 ? next_reachp1 : next_reachp2;
+	
+		int act_index = action * num_combos;
+		for (int c = 0; c < num_combos; c++)
+			act_reach[c] *= strategy[act_index + c];
+		
+
+	}
 		
 	//get regret from expected util from it
 	//update local regret in a given node
+
+	return cf_new; 
 }
-
-
 //i figured it was easier to do terminal first
 std::vector<float> Solver::do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	std::vector<float> cf(num_combos, 0.0);

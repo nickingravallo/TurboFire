@@ -22,6 +22,10 @@
 #define CHECK 1 
 #define RAISE 2
 
+#define ACTION   0
+#define CHANCE   1
+#define TERMINAL 2
+
 #define MAX_RAISES 2
 
 //may pack tighter in the future, for now this works well enough 
@@ -39,6 +43,11 @@ struct GameState {
 };
 
 struct Node {
+	int type;
+	std::vector<Node>& children;
+	int num_children; 
+	std::vector<uint8_t> dealt_cards;
+	//zero in non-actnodes
 	std::vector<double> regret_sum;
 	std::vector<double> strategy_sum;
 };
@@ -49,7 +58,7 @@ class Solver {
 	public:
 		static void train(std::vector<float> p1combos, std::vector<float> p2combos);
 
-		static void solve(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
+		static void solve(GameState state, Node node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
 
 		static std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
 
