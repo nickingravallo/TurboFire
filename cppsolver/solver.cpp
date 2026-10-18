@@ -8,11 +8,11 @@ void Solver::train(std::vector<float> p1combos, std::vector<float> p2combos) {
 		.active   = P1,
 		.prev_act = -1,
 		.street   = FLOP,
-		.pot      = 100,
+		.pot      = 40,
 		.p1commit = 0,
 		.p2commit = 0,
-		.p1stack  = 0,
-		.p2stack  = 0,
+		.p1stack  = 80,
+		.p2stack  = 80,
 		.raises   = 0
 	};
 }
@@ -45,6 +45,7 @@ std::vector<float> Solver::do_action(GameState state, Node& node, int traverser,
 		for (int c = 0; c < num_combos; c++)
 			act_reach[c] *= strategy[act_index + c];
 		
+		auto next = next_state(state, action);
 
 	}
 		
@@ -53,6 +54,43 @@ std::vector<float> Solver::do_action(GameState state, Node& node, int traverser,
 
 	return cf_new; 
 }
+
+GameState Solver::next_state(GameState prev, int action) {
+	auto next = prev;
+	auto& active_commit   = prev.active == P1 ? prev.p1commit : prev.p2commit;
+	auto& inactive_commit = prev.active == P1 ? prev.p2commit : prev.p1commit;
+	auto& active_stack    = prev.active == P1 ? prev.p1stack  : prev.p2stack;
+	auto& inactive_stack  = prev.active == P1 ? prev.p2stack  : prev.p1stack;
+
+	next.active = prev.active == P1 ? P2 : P1;
+	next.prev_act = action;
+	auto next_commit = next.active == P1 ? next.p1commit : next.p2commit; 
+	auto next_stack  = next.stack  == P1 ? next.p1stack  : next.p2stack; 
+
+	if (action == RAISE) {
+		bool is_bet_not_raise = prev.prev_act != RAISE && action == RAISE;
+		int bet_amt = is_bet_not_raise ?
+			pot * 0.5 :
+			active_commit - inactive_commit * RAISE_AMT;
+		next.raises++;
+		next_stack -= bet_amt;
+		next_commmit += bet_amt;
+		next_pot += bet_amt
+	}
+	else if (action == PASS && prev.prev_act == RAISE) {
+		int = active_commit - inactive_commit;
+		next.raises = 0;
+		next_stack -= bet_amt;
+		next_commmit += bet_amt;
+		next_pot += bet_amt
+
+	}
+	if (prev.prev_act == PASS && action == PASS)
+		next.street++;
+
+	return state;
+}
+
 //i figured it was easier to do terminal first
 std::vector<float> Solver::do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	std::vector<float> cf(num_combos, 0.0);

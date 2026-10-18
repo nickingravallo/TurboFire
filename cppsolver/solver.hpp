@@ -21,6 +21,7 @@
 #define CALL  1
 #define CHECK 1 
 #define RAISE 2
+#define RAISE_AMT 2
 
 #define ACTION   0
 #define CHANCE   1
