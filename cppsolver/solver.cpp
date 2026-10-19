@@ -60,38 +60,52 @@ std::vector<float> Solver::do_action(GameState state, Node& node, int traverser,
 //raises are 2.5x, bet is 50% for now
 GameState Solver::next_state(GameState prev, int action) {
 	auto next = prev;
-	auto& active_commit   = prev.active == P1 ? prev.p1commit : prev.p2commit;
-	auto& inactive_commit = prev.active == P1 ? prev.p2commit : prev.p1commit;
-	auto& active_stack    = prev.active == P1 ? prev.p1stack  : prev.p2stack;
-	auto& inactive_stack  = prev.active == P1 ? prev.p2stack  : prev.p1stack;
+	const int active_commit = prev.active == P1 ? prev.p1commit : prev.p2commit;
+	const int inactive_commit = prev.active == P1 ? prev.p2commit : prev.p1commit;
+	const int inactive_stack = prev.active == P1 ? prev.p2stack : prev.p1stack;
+	auto& next_commit = prev.active == P1 ? next.p1commit : next.p2commit;
+	auto& next_stack = prev.active == P1 ? next.p1stack : next.p2stack;
 
 	next.active = prev.active == P1 ? P2 : P1;
 	next.prev_act = action;
-	auto& next_commit = next.active == P1 ? next.p1commit : next.p2commit; 
-	auto& next_stack  = next.stack  == P1 ? next.p1stack  : next.p2stack; 
+	const int to_call = std::max(0, inactive_commit - active_commit);
 
 	if (action == RAISE) {
-		bool is_bet_not_raise = prev.prev_act != RAISE && action == RAISE;
-		int bet_amt = is_bet_not_raise ?
-			pot * 0.5 :
-			active_commit - inactive_commit * RAISE_AMT;
+		const int street_bet = inactive_commit - prev.street_start_commit;
+		int amount = prev.prev_act != RAISE ? std::max(1, prev.pot / 2) :
+			std::max(static_cast<int>(street_bet * RAISE_AMT) -
+				(active_commit - prev.street_start_commit), to_call + prev.last_raise);
+		amount = std::min(amount, std::min(next_stack, to_call + inactive_stack));
+		next.last_raise = amount - to_call;
+		next_stack -= amount;
+		next_commit += amount;
+		next.pot += amount;
 		next.raises++;
-		next_stack -= bet_amt;
-		next_commmit += bet_amt;
-		next_pot += bet_amt
 	}
-	else if (action == PASS && prev.prev_act == RAISE) {
-		int = active_commit - inactive_commit;
-		next.raises = 0;
-		next_stack -= bet_amt;
-		next_commmit += bet_amt;
-		next_pot += bet_amt
-
+	else if (action == PASS) {
+		if (prev.prev_act == RAISE) {
+			const int amount = std::min(to_call, next_stack);
+			next_stack -= amount;
+			next_commit += amount;
+			next.pot += amount;
+			const int refund = to_call - amount;
+			auto& opponent_commit = prev.active == P1 ? next.p2commit : next.p1commit;
+			auto& opponent_stack = prev.active == P1 ? next.p2stack : next.p1stack;
+			opponent_commit -= refund;
+			opponent_stack += refund;
+			next.pot -= refund;
+		}
+		if (prev.prev_act == RAISE || prev.prev_act == PASS) {
+			next.street++;
+			next.prev_act = NONE;
+			next.raises = 0;
+			next.last_raise = 0;
+			next.street_start_commit = next.p1commit;
+			next.active = P1;
+		}
 	}
-	if (prev.prev_act == PASS && action == PASS)
-		next.street++;
 
-	return state;
+	return next;
 }
 
 //i figured it was easier to do terminal first
@@ -169,29 +183,21 @@ TODO - WE NEED TO DO CHIP CHECKING!
  */
 //check / call same value as they are the passive action
 std::vector<int> Solver::get_legal_actions(const GameState& state) {
-	std::vector<int> actions;
-	//passive action always an option
-	actions.push_back(PASS);
-	//first to act
-	if (state.prev_act == NONE || state.prev_act == PASS) {
-		if (state.raises < MAX_RAISES) 
-			actions.push_back(RAISE);
-		return actions;
-	}
+	if (state.prev_act == FOLD || state.street > RIVER)
+		return {};
+	const int active_commit = state.active == P1 ? state.p1commit : state.p2commit;
+	const int inactive_commit = state.active == P1 ? state.p2commit : state.p1commit;
+	const int active_stack = state.active == P1 ? state.p1stack : state.p2stack;
+	const int inactive_stack = state.active == P1 ? state.p2stack : state.p1stack;
+	const int to_call = std::max(0, inactive_commit - active_commit);
+	if (to_call == 0 && (active_stack == 0 || inactive_stack == 0))
+		return {};
 
-	if (state.prev_act == RAISE) {
+	std::vector<int> actions{PASS};
+	if (to_call > 0)
 		actions.push_back(FOLD);
-		if (state.raises < MAX_RAISES) 
-			actions.push_back(RAISE);		
-		return actions;
-	}
-
-	if (state.prev_act == FOLD) {
-		std::cout << "state.prev_act was fold in get_legal_actions. BAD!\n";
-		return actions;
-	}
-
-	std::cout << "state.prev_act out of band, really bad!\n";
+	if (state.raises < MAX_RAISES && active_stack > to_call && inactive_stack > 0)
+		actions.push_back(RAISE);
 	return actions;
 }
 

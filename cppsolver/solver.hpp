@@ -21,7 +21,7 @@
 #define CALL  1
 #define CHECK 1 
 #define RAISE 2
-#define RAISE_AMT 2
+#define RAISE_AMT 2.5
 
 #define ACTION   0
 #define CHANCE   1
@@ -41,6 +41,8 @@ struct GameState {
 	int p1stack;
 	int p2stack;
 	int raises;
+	int street_start_commit = 0;
+	int last_raise = 0;
 };
 
 struct Node {
@@ -58,6 +60,7 @@ class Solver {
 		static inline std::vector<float> handle_fold(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
 	public:
 		static void train(std::vector<float> p1combos, std::vector<float> p2combos);
+		static GameState next_state(GameState prev, int action);
 
 		static void solve(GameState state, Node node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
 
