@@ -28,31 +28,47 @@ std::vector<float> Solver::solve(GameState state, Node& node, int traverser, int
 	*/
 }
 
-std::vector<float> Solver::do_action(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2, std::vector<float> cf) {
-	std::vector<float> cf_new;
+//TODO - fix perspective of traverser to update when necessary
+std::vector<float> Solver::do_action(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	//first we need strategy -> strategy is built from regret
 	//array size [legal_actions][num_combos]
 	auto strategy = get_strategy(legal, num_combos, node.regret);
 	//then we need legal actions
 	auto legal_actions = get_legal_actions(state);
+	std::vector<float> action_cf(num_combos*legal_actions, 0.0);
+	std::vector<float> node_cf(num_combos, 0.0);
 	//we iterate over legal actions and traverse each node 
-	for (auto action : legal_actions) {
+	for (int a = 0; a < legal_actions.size(); a++) {
+		int action = legal_actions[a];
 		auto next_p1reach = reachp1;
 		auto next_p2reach = reachp2;
 		auto& act_reach = state.active == P1 ? next_reachp1 : next_reachp2;
 	
-		int act_index = action * num_combos;
+		int act_index = a * num_combos;
 		for (int c = 0; c < num_combos; c++)
 			act_reach[c] *= strategy[act_index + c];
 		
 		auto next = next_state(state, action);
-
+		//"counterfactual" bc excludes hero's prob which we will retroactively correct with * strategy for each infoset returned
+		auto child_cf = solve(next, node.children[a], traverser, num_combos, next_p1reach, next_p2reach);
+		for (int ccf = 0; i < node_cf.size(); i++) {
+			int aci = a * num_combos + i;
+			node_cf[i]    += strategy[aci] * child_cf[i];
+			action_cf[aci] = child_cf[i] 
+		}	
 	}
 		
 	//get regret from expected util from it
 	//update local regret in a given node
+	for (int a = 0; a < num_actions; a++) {
+		for (int c = 0; c < num_combos; c++) {
+			int aci = a * num_combos + i;
+			regret_sum[aci]   += action_cf[aci] - node_cf[c];
+			strategy_sum[aci] += strategy[aci];
+		}
+	}
 
-	return cf_new; 
+	return node_cf; 
 }
 
 //note that commit is a RUNNING TALLY
