@@ -17,32 +17,29 @@ void Solver::train(std::vector<float> p1combos, std::vector<float> p2combos) {
 	};
 }
 
-std::vector<float> Solver::solve(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2, std::vector<float> cf) {
-	/*
+std::vector<float> Solver::solve(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	if (node.type == ACTION)
-		return do_action();
+		return do_action(state, node, traverser, num_combos, reachp1, reachp2);
 	if (node.type == CHANCE) 
-		return do_chance();
+		std::cout << "chance not implemented yet\n";
 	if (node.type == TERMINAL)
-		return do_terminal();
-	*/
+		return do_terminal(state, traverser, num_combos, reachp1, reachp2);
 }
 
-//TODO - fix perspective of traverser to update when necessary
 std::vector<float> Solver::do_action(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	//first we need strategy -> strategy is built from regret
 	//array size [legal_actions][num_combos]
-	auto strategy = get_strategy(legal, num_combos, node.regret);
 	//then we need legal actions
 	auto legal_actions = get_legal_actions(state);
-	std::vector<float> action_cf(num_combos*legal_actions, 0.0);
+	auto strategy = get_strategy(legal_actions.size(), num_combos, node.regret_sum);
+	std::vector<float> action_cf(num_combos * legal_actions.size(), 0.0);
 	std::vector<float> node_cf(num_combos, 0.0);
 	//we iterate over legal actions and traverse each node 
 	for (int a = 0; a < legal_actions.size(); a++) {
 		int action = legal_actions[a];
 		auto next_p1reach = reachp1;
 		auto next_p2reach = reachp2;
-		auto& act_reach = state.active == P1 ? next_reachp1 : next_reachp2;
+		auto& act_reach = state.active == P1 ? next_p1reach : next_p2reach;
 	
 		int act_index = a * num_combos;
 		for (int c = 0; c < num_combos; c++)
@@ -51,20 +48,35 @@ std::vector<float> Solver::do_action(GameState state, Node& node, int traverser,
 		auto next = next_state(state, action);
 		//"counterfactual" bc excludes hero's prob which we will retroactively correct with * strategy for each infoset returned
 		auto child_cf = solve(next, node.children[a], traverser, num_combos, next_p1reach, next_p2reach);
-		for (int ccf = 0; i < node_cf.size(); i++) {
-			int aci = a * num_combos + i;
-			node_cf[i]    += strategy[aci] * child_cf[i];
-			action_cf[aci] = child_cf[i] 
-		}	
+
+		//faster for branch pred
+		if (traverser == state.active) {
+			for (int i = 0; i < node_cf.size(); i++) {
+				int aci = a * num_combos + i;
+				node_cf[i]    += strategy[aci] * child_cf[i];
+					action_cf[aci] = child_cf[i];
+			}
+		}
+		else {
+			for (int i = 0; i < node_cf.size(); i++) {
+				node_cf[i] += child_cf[i];
+			}
+		}
+
 	}
 		
+	//once again, dont update for non-trav
+	if (traverser != state.active)
+		return node_cf;
+	const auto& own_reach = state.active == P1 ? reachp1 : reachp2;
+
 	//get regret from expected util from it
 	//update local regret in a given node
-	for (int a = 0; a < num_actions; a++) {
+	for (int a = 0; a < legal_actions.size(); a++) {
 		for (int c = 0; c < num_combos; c++) {
-			int aci = a * num_combos + i;
-			regret_sum[aci]   += action_cf[aci] - node_cf[c];
-			strategy_sum[aci] += strategy[aci];
+			int aci = a * num_combos + c;
+			node.regret_sum[aci]   += action_cf[aci] - node_cf[c];
+			node.strategy_sum[aci] += own_reach[c] * strategy[aci];
 		}
 	}
 
@@ -156,18 +168,16 @@ std::vector<float> Solver::do_terminal(GameState state, int traverser, int num_c
 
 inline std::vector<float> Solver::handle_fold(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
 	std::vector<float> cf(num_combos, 0.0);
-	int vill = traverser == P1 ? P2 : P1; 
-	auto reachvill = traverser == P1 ? reachp2 : reachp1; 
-	int po = 0;
 
-	if (state.active == P1 && vill == P1) //hero fold, vill win hero commit
-		po = -state.p2commit;	
-	if (state.active == P1 && vill == P2) //vill fold, hero win vill commit 
-		po = state.p2commit;
-	if (state.active == P2 && vill == P1) //vill fold, hero win vill commit
-		po = state.p1commit;
-	if (state.active == P2 && vill == P2) //hero fold, vill win hero commit
-		po = -state.p1commit;
+	//we dont count prelfop towards commit
+	const float initial_half_pot = (state.pot - state.p1commit - state.p2commit) / 2.0f;
+
+	const int own_commit = traverser == P1 ? state.p1commit : state.p2commit;
+	const int opponent_commit = traverser == P1 ? state.p2commit : state.p1commit;
+
+	const float po = state.active == traverser
+		? initial_half_pot + opponent_commit
+		: -initial_half_pot - own_commit;
 
 	for (int p1 = 0; p1 < reachp1.size(); p1++) {
 		std::uint64_t p1h = Hands::get_mask_for_combo(p1); 
@@ -176,20 +186,23 @@ inline std::vector<float> Solver::handle_fold(GameState state, int traverser, in
 			//we cant be blocking cards 
 			if ((p1h & p2h) || ((p1h | p2h) & state.board))
 				continue;
-			cf[p1] += po * reachvill[p2];
+			if (traverser == P1)
+				cf[p1] += po * reachp2[p2];
+			else
+				cf[p2] += po * reachp1[p1];
 		}
 	}
 
 	return cf;
 }
 
-int Solver::payoff(GameState state, int p1, int p2, int trav) {
-	int p = 0;
+float Solver::payoff(GameState state, int p1, int p2, int trav) {
+	float p = 0;
 	//this assumes p1 perspective
 	if (p1 > p2)
-		p = state.pot/2;
+		p = state.pot / 2.0f;
 	else if (p2 > p1)
-		p = -state.pot/2;
+		p = -state.pot / 2.0f;
 
 	return trav == P1 ? p : -p;
 }
@@ -220,14 +233,14 @@ std::vector<int> Solver::get_legal_actions(const GameState& state) {
 //we should store regret as [actions][combos]
 //each action[] has an infoset for a given combo
 //note that combos is a less generalized form of "infoset"
-std::vector<float> Solver::get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret) {
+std::vector<float> Solver::get_strategy(int legal_actions, int num_combos, const std::vector<double>& regret) {
 	std::vector<float> strategy(legal_actions * num_combos, 0.0);
 	std::vector<float> rsum(num_combos, 0.0); //positive regret sum per combo over A (all actions a)
 
 	for (int i = 0; i < legal_actions; i++) {
 		for (int j = 0; j < num_combos; j++) {
 			int regret_i = (i*num_combos) + j;
-			float r = std::max(0.0f, regret[regret_i]);
+			float r = std::max(0.0, regret[regret_i]);
 			strategy[regret_i] = r;
 			rsum[j] += r;
 		}

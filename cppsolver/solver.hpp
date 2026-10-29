@@ -62,12 +62,13 @@ class Solver {
 		static void train(std::vector<float> p1combos, std::vector<float> p2combos);
 		static GameState next_state(GameState prev, int action);
 
-		static void solve(GameState state, Node node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
+		static std::vector<float> solve(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
+		static std::vector<float> do_action(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2);
 
 		static std::vector<float> do_terminal(GameState state, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2); 
 
 		static std::vector<int> get_legal_actions(const GameState& state); 
-		static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret);
-		static int payoff(GameState state, int p1, int p2, int trav); 
+		static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<double>& regret);
+		static float payoff(GameState state, int p1, int p2, int trav);
 };
 
