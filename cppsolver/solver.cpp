@@ -21,9 +21,37 @@ std::vector<float> Solver::solve(GameState state, Node& node, int traverser, int
 	if (node.type == ACTION)
 		return do_action(state, node, traverser, num_combos, reachp1, reachp2);
 	if (node.type == CHANCE) 
-		std::cout << "chance not implemented yet\n";
+		return do_chance(state, node, traverser, num_combos, reachp1, reachp2);
 	if (node.type == TERMINAL)
 		return do_terminal(state, traverser, num_combos, reachp1, reachp2);
+	return std::vector<float>(num_combos, 0.0f);
+}
+
+std::vector<float> Solver::do_chance(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
+	std::vector<float> cf(num_combos, 0.0f);
+	int remaining = 48;
+	for (int card = 0; card < 52; card++)
+		if (state.board & Hands::card_bit(card))
+			remaining--;
+	for (int c = 0; c < node.dealt_cards.size(); c++) {
+		const auto card = Hands::card_bit(node.dealt_cards[c]);
+		if (state.board & card)
+			continue;
+		auto next = state;
+		next.board |= card;
+		auto next_p1reach = reachp1;
+		auto next_p2reach = reachp2;
+		for (int i = 0; i < num_combos; i++) {
+			const float probability = (Hands::get_mask_for_combo(i) & next.board) ? 0.0f : 1.0f / remaining;
+			next_p1reach[i] *= probability;
+			next_p2reach[i] *= probability;
+		}
+		auto child_cf = solve(next, node.children[c], traverser, num_combos, next_p1reach, next_p2reach);
+		for (int i = 0; i < num_combos; i++)
+			if (!(Hands::get_mask_for_combo(i) & next.board))
+				cf[i] += child_cf[i];
+	}
+	return cf;
 }
 
 std::vector<float> Solver::do_action(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {
