@@ -15,13 +15,8 @@ int main() {
 	std::cout << "Villain range:\n";
 	Hands::show_range(vr);
 		
-	std::vector<float> p1combos(1326, 0.0f);
-	std::vector<float> p2combos(1326, 0.0f);
-	//the uint64 (52bit in reality) value for each idx 
-	for (int i = 0; i <= 1326; i++) {
-		p1combos[i] = 1;
-		p2combos[i] = 1;
-	}
+	auto p1combos = Hands::parse_range_to_combos(hr);
+	auto p2combos = Hands::parse_range_to_combos(vr);
 
 	Solver::train(p1combos, p2combos);
 

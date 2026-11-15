@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdint>
 #include <cmath>
+#include <random>
 
 class Hands {
 	private:
@@ -15,6 +16,9 @@ class Hands {
 		static const std::unordered_map<std::string, double> villain; 
 
 		static std::vector<double> parse_range(const std::unordered_map<std::string, double>& range);
+		static std::vector<float> parse_range_to_combos(const std::vector<double>& range, std::uint64_t dead_cards = 0);
+		static std::vector<uint8_t> available_cards(std::uint64_t dead_cards);
+		static std::uint64_t deal_cards(int count, std::uint64_t dead_cards, std::mt19937& rng);
 		static void show_range(std::vector<double> range);
 		static inline __attribute__((always_inline)) std::uint64_t card_bit(int card) {
 			int rank = card % 13;

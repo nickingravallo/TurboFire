@@ -3,8 +3,9 @@
 #include "evaluator.hpp"
 
 void Solver::train(std::vector<float> p1combos, std::vector<float> p2combos) {
+	std::mt19937 rng(std::random_device{}());
 	GameState state{
-		.board    = 0,
+		.board    = Hands::deal_cards(3, 0, rng),
 		.active   = P1,
 		.prev_act = -1,
 		.street   = FLOP,
@@ -15,6 +16,12 @@ void Solver::train(std::vector<float> p1combos, std::vector<float> p2combos) {
 		.p2stack  = 80,
 		.raises   = 0
 	};
+	for (int i = 0; i < p1combos.size(); i++)
+		if (Hands::get_mask_for_combo(i) & state.board)
+			p1combos[i] = 0.0f;
+	for (int i = 0; i < p2combos.size(); i++)
+		if (Hands::get_mask_for_combo(i) & state.board)
+			p2combos[i] = 0.0f;
 }
 
 std::vector<float> Solver::solve(GameState state, Node& node, int traverser, int num_combos, std::vector<float> reachp1, std::vector<float> reachp2) {

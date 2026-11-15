@@ -1,7 +1,7 @@
 #include "hands.hpp"
 
-#define NUM_CARDS = 13;
-#define NUM_SUITS = 4;
+#include <algorithm>
+#include <stdexcept>
 
 const std::unordered_map<std::string, double> Hands::hero = {
 	{"99+", 1.0},
@@ -26,29 +26,41 @@ const std::unordered_map<char, int> Hands::suits = {
 	{'C', 3}, {'D', 2}, {'H', 1}, {'S', 0},
 };
 
-/*
- * suited => sum(1, 12) => 78 * 4  = 312
- * 2c2d 2c2h 2c2s
- * 2d2h 2d2s
- * 2h2s
- * pair   =>               13 * 6  = 78 
- * AcKd AcKh AcKs
- * AdKc AdKh AdKs
- * AhKc AhKd AhKs
- * AsKc AsKd AsKs 
- * suited =>               78 * 12 = 936
- */
-int count_combos_for_hand(char c1, char c2, bool suited) {
-	if (suited)
-		return 6;
-	if (c1 != c2)
-		return 12;
-	return 4;
+std::vector<float> Hands::parse_range_to_combos(const std::vector<double>& range, std::uint64_t dead_cards) {
+	if (range.size() != 169)
+		throw std::invalid_argument("Expected 169 range entries");
+	std::vector<float> out(1326, 0.0f);
+	int combo = 0;
+	for (int c1 = 0; c1 < 52; c1++) {
+		for (int c2 = c1 + 1; c2 < 52; c2++, combo++) {
+			if ((card_bit(c1) | card_bit(c2)) & dead_cards)
+				continue;
+			const int high = 12 - std::max(c1 % 13, c2 % 13);
+			const int low = 12 - std::min(c1 % 13, c2 % 13);
+			const int index = c1 / 13 == c2 / 13 ? 13 * low + high : 13 * high + low;
+			out[combo] = range[index];
+		}
+	}
+	return out;
 }
 
-std::vector<double> parse_range_to_combos(std::vector<double> isorange) {
-	std::vector<double> out(1326, 0.0f);
-	return out;
+std::vector<uint8_t> Hands::available_cards(std::uint64_t dead_cards) {
+	std::vector<uint8_t> deck;
+	for (int card = 0; card < 52; card++)
+		if (!(card_bit(card) & dead_cards))
+			deck.push_back(card);
+	return deck;
+}
+
+std::uint64_t Hands::deal_cards(int count, std::uint64_t dead_cards, std::mt19937& rng) {
+	auto deck = available_cards(dead_cards);
+	if (count < 0 || count > static_cast<int>(deck.size()))
+		throw std::invalid_argument("Not enough cards to deal");
+	std::shuffle(deck.begin(), deck.end(), rng);
+	std::uint64_t dealt = 0;
+	for (int i = 0; i < count; i++)
+		dealt |= card_bit(deck[i]);
+	return dealt;
 }
 
 std::vector<double> Hands::parse_range(const std::unordered_map<std::string, double>& range) {
