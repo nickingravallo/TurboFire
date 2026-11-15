@@ -1,6 +1,6 @@
 # TurboFire
 
-A game-theory-optimal poker solver
+A game theory optimal poker solver
 
 ## What does it do?
 
