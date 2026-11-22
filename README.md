@@ -1,14 +1,6 @@
 # TurboFire
 
-A game theory optimal poker solver
-
-## What does it do?
-
-TurboFire is an incredible heavy solver that builds trees to their completion. With a 100% range, TurboFire will require around ~500GB of memory.
-
-This solver was created to learn how Poker solvers operate alongside C++. TurboFire operates as a bare-bones solver, and its code is an excellent resource for understanding the algorithms behind modern solvers. Its output was used in training a transformer model to see how they generalize poker concepts.
-
-If you would like to use this solver in the real world, memory saving techniques will be required.
+A game theory optimal poker solver. cppsolver/ is a handwritten skeleton of the algorithm used for learning. 
 
 ## References
 
