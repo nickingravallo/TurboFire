@@ -16,3 +16,4 @@ venv/
 .cursor/
 .vscode/
 .DS_Store
+!/solver/omp/

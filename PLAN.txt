@@ -1,0 +1,7 @@
+Implement the following additions to cppsolver/ inside of a new folder:
+- isomorphism in dealt cards on chance nodes
+  - we should assume that the card we want to see for chance nodes on turn + river are entered alongside flop
+	- this should in theory allow us to use select isomorphism
+  - We should allow for all suited combinations in action nodes
+  - Offsuit combinations should be generic and are based on one canonical hand
+  - hands not used in either hero or villain range will be calculated
