@@ -44,12 +44,12 @@ struct GameState {
 	int last_raise = 0;
 };
 
-#include "../isomorphism/chance.hpp"
+#include "chance.hpp"
 #include <map>
 
 struct Node {
     std::vector<Node> children;
-    std::vector<double> regret_sum, strategy_sum;
+    std::vector<float> regret_sum, strategy_sum;
 };
 
 class Solver {
@@ -66,8 +66,16 @@ private:
         turbofire::Card card;
         std::vector<turbofire::SuitPermutation> mappings;
     };
+    struct BoardHands {
+        std::vector<int> combos;
+        // Indices into combos for hands with positive starting weight.
+        std::array<std::vector<int>, 2> in_range;
+    };
+    std::map<std::uint64_t, BoardHands> board_hands;
+    const BoardHands& hands_on_board(std::uint64_t board);
     Reach ranges;
     Node root;
+    std::optional<std::pair<std::uint64_t, int>> root_layout;
     std::map<int, std::vector<DealGroup>> groups;
     std::map<turbofire::SuitPermutation, std::array<int,1326>> permutations;
     std::array<std::uint64_t,1326> masks;
@@ -81,5 +89,5 @@ private:
     std::vector<float> terminal(GameState state, int traverser, const std::vector<float>& opponent);
     static GameState next_state(GameState prev, int action);
     static std::vector<int> get_legal_actions(const GameState& state);
-    static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<double>& regret);
+    static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret);
 };

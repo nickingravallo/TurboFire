@@ -38,7 +38,33 @@ Solver::Solver(std::array<Card,3> flop, std::vector<float> hero, std::vector<flo
     }
 }
 
+const Solver::BoardHands& Solver::hands_on_board(std::uint64_t board) {
+    auto [entry, inserted] = board_hands.try_emplace(board);
+    auto& hands = entry->second;
+    if (inserted) {
+        for (int combo = 0; combo < 1326; ++combo) {
+            if (masks[combo] & board)
+                continue;
+            int slot = static_cast<int>(hands.combos.size());
+            hands.combos.push_back(combo);
+            for (int player : {P1, P2}) {
+                if (ranges[player][combo] > 0)
+                    hands.in_range[player].push_back(slot);
+            }
+        }
+    }
+    return hands;
+}
+
 std::vector<float> Solver::train(GameState state, std::optional<Card> turn, int iterations) {
+    // A different starting board or player can assign different hands to the same slot.
+    const auto layout = std::make_pair(state.board, state.active);
+    if (root_layout != layout) {
+        root = Node{};
+        action_nodes = 0;
+        strategy_bytes = 0;
+        root_layout = layout;
+    }
     auto reach = ranges;
     for (auto& player : reach)
         for (int i = 0; i < 1326; ++i)
@@ -63,32 +89,42 @@ std::vector<float> Solver::solve(GameState state, Node& node, int traverser,
     auto actions = get_legal_actions(state);
     if (actions.empty())
         return terminal(state, traverser, reach[1-traverser]);
+    const auto& hands = hands_on_board(state.board);
+    const auto& in_range = hands.in_range[state.active];
+    const auto legal_count = hands.combos.size();
     if (node.children.empty()) {
         node.children.resize(actions.size());
-        node.regret_sum.resize(1326 * actions.size());
-        node.strategy_sum.resize(1326 * actions.size());
+        node.regret_sum.resize(legal_count * actions.size());
+        node.strategy_sum.resize(in_range.size() * actions.size());
         ++action_nodes;
-        strategy_bytes += 2 * node.regret_sum.size() * sizeof(double);
+        strategy_bytes += (node.regret_sum.size() + node.strategy_sum.size()) * sizeof(float);
     }
-    auto strategy = get_strategy(actions.size(), 1326, node.regret_sum);
+    auto strategy = get_strategy(actions.size(), legal_count, node.regret_sum);
     std::vector<std::vector<float>> child_values;
     std::vector<float> values(1326);
     for (std::size_t a = 0; a < actions.size(); ++a) {
         auto next = reach;
-        for (int i = 0; i < 1326; ++i)
-            next[state.active][i] *= strategy[a * 1326 + i];
+        const auto offset = a * legal_count;
+        for (std::size_t slot = 0; slot < legal_count; ++slot)
+            next[state.active][hands.combos[slot]] *= strategy[offset + slot];
         auto child = solve(next_state(state, actions[a]), node.children[a], traverser, next, turn);
-        for (int i = 0; i < 1326; ++i)
-            values[i] += child[i] * (traverser == state.active ? strategy[a * 1326 + i] : 1.0f);
+        for (std::size_t slot = 0; slot < legal_count; ++slot) {
+            int combo = hands.combos[slot];
+            values[combo] += child[combo] * (traverser == state.active ? strategy[offset + slot] : 1.0f);
+        }
         if (traverser == state.active)
             child_values.push_back(std::move(child));
     }
     if (traverser == state.active) {
         for (std::size_t a = 0; a < actions.size(); ++a) {
-            for (int i = 0; i < 1326; ++i) {
-                auto slot = a * 1326 + i;
-                node.regret_sum[slot] += child_values[a][i] - values[i];
-                node.strategy_sum[slot] += reach[traverser][i] * strategy[slot];
+            const auto offset = a * legal_count;
+            for (std::size_t slot = 0; slot < legal_count; ++slot) {
+                int combo = hands.combos[slot];
+                node.regret_sum[offset + slot] += child_values[a][combo] - values[combo];
+            }
+            for (std::size_t j = 0; j < in_range.size(); ++j) {
+                int slot = in_range[j];
+                node.strategy_sum[a * in_range.size() + j] += reach[traverser][hands.combos[slot]] * strategy[offset + slot];
             }
         }
     }
@@ -244,14 +280,14 @@ std::vector<int> Solver::get_legal_actions(const GameState& state) {
 	return actions;
 }
 
-std::vector<float> Solver::get_strategy(int legal_actions, int num_combos, const std::vector<double>& regret) {
+std::vector<float> Solver::get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret) {
 	std::vector<float> strategy(legal_actions * num_combos, 0.0);
 	std::vector<float> rsum(num_combos, 0.0);
 
 	for (int i = 0; i < legal_actions; i++) {
 		for (int j = 0; j < num_combos; j++) {
 			int regret_i = (i*num_combos) + j;
-			float r = std::max(0.0, regret[regret_i]);
+			float r = std::max(0.0f, regret[regret_i]);
 			strategy[regret_i] = r;
 			rsum[j] += r;
 		}

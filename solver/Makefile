@@ -1,7 +1,7 @@
 CXX ?= c++
 CXXFLAGS ?= -O2 -std=c++17
-SOURCES = TurboFire.cpp solver.cpp hands.cpp evaluator.cpp omp/HandEvaluator.cpp ../isomorphism/chance.cpp
-HEADERS = solver.hpp hands.hpp evaluator.hpp ../isomorphism/chance.hpp $(wildcard omp/*.h omp/*.hxx)
+SOURCES = TurboFire.cpp solver.cpp hands.cpp evaluator.cpp omp/HandEvaluator.cpp chance.cpp
+HEADERS = solver.hpp hands.hpp evaluator.hpp chance.hpp $(wildcard omp/*.h omp/*.hxx)
 
 turbofire: $(SOURCES) $(HEADERS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) -o $@
