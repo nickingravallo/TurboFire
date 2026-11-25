@@ -21,13 +21,12 @@
 #define CALL  1
 #define CHECK 1
 #define RAISE 2
-#define RAISE_AMT 2.5
 
 #define ACTION   0
 #define CHANCE   1
 #define TERMINAL 2
 
-#define MAX_RAISES 2
+#include <tuple>
 
 struct GameState {
 	std::uint64_t board;
@@ -47,6 +46,25 @@ struct GameState {
 #include "chance.hpp"
 #include <map>
 
+struct StreetBetting {
+    std::vector<double> bet_pot_fractions{0.5};
+    std::vector<double> raise_to_multipliers{2.5};
+    int raise_cap = 2; // Includes the opening bet.
+};
+
+using BettingConfig = std::array<StreetBetting, 3>;
+
+struct BettingAction {
+    int kind;
+    int chips; // Additional chips committed by the acting player.
+};
+
+inline auto betting_root_key(const GameState& s, std::optional<turbofire::Card> turn) {
+    return std::make_tuple(s.board, turn, s.active, s.prev_act, s.street, s.pot,
+                           s.p1commit, s.p2commit, s.p1stack, s.p2stack, s.raises,
+                           s.street_start_commit, s.last_raise);
+}
+
 struct Node {
     std::vector<Node> children;
     std::vector<float> regret_sum, strategy_sum;
@@ -55,7 +73,8 @@ struct Node {
 class Solver {
 public:
     Solver(std::array<turbofire::Card, 3> flop, std::vector<float> hero,
-           std::vector<float> villain, bool share);
+           std::vector<float> villain, bool share, BettingConfig betting = {});
+    std::vector<BettingAction> get_legal_actions(const GameState& state) const;
     std::vector<float> train(GameState state, std::optional<turbofire::Card> turn, int iterations);
     std::size_t action_nodes = 0;
     std::size_t strategy_bytes = 0;
@@ -73,9 +92,10 @@ private:
     };
     std::map<std::uint64_t, BoardHands> board_hands;
     const BoardHands& hands_on_board(std::uint64_t board);
+    BettingConfig betting;
     Reach ranges;
     Node root;
-    std::optional<std::pair<std::uint64_t, int>> root_layout;
+    std::optional<decltype(betting_root_key(GameState{}, std::nullopt))> root_layout;
     std::map<int, std::vector<DealGroup>> groups;
     std::map<turbofire::SuitPermutation, std::array<int,1326>> permutations;
     std::array<std::uint64_t,1326> masks;
@@ -87,7 +107,6 @@ private:
     std::vector<float> chance(GameState state, Node& node, int traverser,
                               const Reach& reach, std::optional<turbofire::Card> turn);
     std::vector<float> terminal(GameState state, int traverser, const std::vector<float>& opponent);
-    static GameState next_state(GameState prev, int action);
-    static std::vector<int> get_legal_actions(const GameState& state);
-    static std::vector<float> get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret);
+    static GameState next_state(GameState prev, BettingAction action);
+    static std::vector<float> get_strategy(std::size_t legal_actions, std::size_t num_combos, const std::vector<float>& regret);
 };

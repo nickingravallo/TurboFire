@@ -5,8 +5,18 @@
 
 using turbofire::Card;
 
-Solver::Solver(std::array<Card,3> flop, std::vector<float> hero, std::vector<float> villain, bool share)
-    : ranges{std::move(hero), std::move(villain)} {
+Solver::Solver(std::array<Card,3> flop, std::vector<float> hero, std::vector<float> villain, bool share, BettingConfig config)
+    : betting(std::move(config)), ranges{std::move(hero), std::move(villain)} {
+    for (const auto& street : betting) {
+        if (street.raise_cap < 0)
+            throw std::invalid_argument("Raise cap must be nonnegative");
+        for (double size : street.bet_pot_fractions)
+            if (!std::isfinite(size) || size <= 0)
+                throw std::invalid_argument("Bet fractions must be finite and positive");
+        for (double size : street.raise_to_multipliers)
+            if (!std::isfinite(size) || size <= 1)
+                throw std::invalid_argument("Raise-to multipliers must be finite and greater than one");
+    }
     turbofire::ChanceIsomorphism iso(flop, ranges[0], ranges[1]);
     for (int i = 0, a = 0; a < 52; ++a) {
         for (int b = a + 1; b < 52; ++b, ++i) {
@@ -57,8 +67,8 @@ const Solver::BoardHands& Solver::hands_on_board(std::uint64_t board) {
 }
 
 std::vector<float> Solver::train(GameState state, std::optional<Card> turn, int iterations) {
-    // A different starting board or player can assign different hands to the same slot.
-    const auto layout = std::make_pair(state.board, state.active);
+    // Reuse regrets only for the same starting tree.
+    const auto layout = betting_root_key(state, turn);
     if (root_layout != layout) {
         root = Node{};
         action_nodes = 0;
@@ -211,33 +221,28 @@ std::vector<float> Solver::terminal(GameState state, int traverser, const std::v
     }
     return values;
 }
-GameState Solver::next_state(GameState prev, int action) {
+GameState Solver::next_state(GameState prev, BettingAction action) {
 	auto next = prev;
 	const int active_commit = prev.active == P1 ? prev.p1commit : prev.p2commit;
 	const int inactive_commit = prev.active == P1 ? prev.p2commit : prev.p1commit;
-	const int inactive_stack = prev.active == P1 ? prev.p2stack : prev.p1stack;
 	auto& next_commit = prev.active == P1 ? next.p1commit : next.p2commit;
 	auto& next_stack = prev.active == P1 ? next.p1stack : next.p2stack;
 
 	next.active = prev.active == P1 ? P2 : P1;
-	next.prev_act = action;
+	next.prev_act = action.kind;
 	const int to_call = std::max(0, inactive_commit - active_commit);
 
-	if (action == RAISE) {
-		const int street_bet = inactive_commit - prev.street_start_commit;
-		int amount = prev.prev_act != RAISE ? std::max(1, prev.pot / 2) :
-			std::max(static_cast<int>(street_bet * RAISE_AMT) -
-				(active_commit - prev.street_start_commit), to_call + prev.last_raise);
-		amount = std::min(amount, std::min(next_stack, to_call + inactive_stack));
+	if (action.kind == RAISE) {
+		const int amount = action.chips;
 		next.last_raise = amount - to_call;
 		next_stack -= amount;
 		next_commit += amount;
 		next.pot += amount;
 		next.raises++;
 	}
-	else if (action == PASS) {
-		if (prev.prev_act == RAISE) {
-			const int amount = std::min(to_call, next_stack);
+	else if (action.kind == PASS) {
+		if (to_call > 0) {
+			const int amount = action.chips;
 			next_stack -= amount;
 			next_commit += amount;
 			next.pot += amount;
@@ -261,7 +266,7 @@ GameState Solver::next_state(GameState prev, int action) {
 	return next;
 }
 
-std::vector<int> Solver::get_legal_actions(const GameState& state) {
+std::vector<BettingAction> Solver::get_legal_actions(const GameState& state) const {
 	if (state.prev_act == FOLD || state.street > RIVER)
 		return {};
 	const int active_commit = state.active == P1 ? state.p1commit : state.p2commit;
@@ -272,21 +277,40 @@ std::vector<int> Solver::get_legal_actions(const GameState& state) {
 	if (to_call == 0 && (active_stack == 0 || inactive_stack == 0))
 		return {};
 
-	std::vector<int> actions{PASS};
+	std::vector<BettingAction> actions{{PASS, std::min(to_call, active_stack)}};
 	if (to_call > 0)
-		actions.push_back(FOLD);
-	if (state.raises < MAX_RAISES && active_stack > to_call && inactive_stack > 0)
-		actions.push_back(RAISE);
+		actions.push_back({FOLD, 0});
+	const auto& rules = betting.at(state.street);
+	if (state.raises >= rules.raise_cap || active_stack <= to_call || inactive_stack == 0)
+		return actions;
+
+	const int maximum = to_call + std::min(active_stack - to_call, inactive_stack);
+	const auto& sizes = to_call ? rules.raise_to_multipliers : rules.bet_pot_fractions;
+	for (double size : sizes) {
+		double chips = size * state.pot;
+		if (to_call) {
+			chips = size * (inactive_commit - state.street_start_commit)
+			        - (active_commit - state.street_start_commit);
+			chips = std::max(chips, double(to_call) + std::max(1, state.last_raise));
+		}
+		int amount = static_cast<int>(std::clamp(chips, 1.0, double(maximum)));
+		actions.push_back({RAISE, amount});
+	}
+	auto first_raise = actions.begin() + (to_call ? 2 : 1);
+	std::sort(first_raise, actions.end(), [](auto a, auto b) { return a.chips < b.chips; });
+	actions.erase(std::unique(first_raise, actions.end(), [](auto a, auto b) {
+		return a.chips == b.chips;
+	}), actions.end());
 	return actions;
 }
 
-std::vector<float> Solver::get_strategy(int legal_actions, int num_combos, const std::vector<float>& regret) {
+std::vector<float> Solver::get_strategy(std::size_t legal_actions, std::size_t num_combos, const std::vector<float>& regret) {
 	std::vector<float> strategy(legal_actions * num_combos, 0.0);
 	std::vector<float> rsum(num_combos, 0.0);
 
-	for (int i = 0; i < legal_actions; i++) {
-		for (int j = 0; j < num_combos; j++) {
-			int regret_i = (i*num_combos) + j;
+	for (std::size_t i = 0; i < legal_actions; i++) {
+		for (std::size_t j = 0; j < num_combos; j++) {
+			auto regret_i = (i*num_combos) + j;
 			float r = std::max(0.0f, regret[regret_i]);
 			strategy[regret_i] = r;
 			rsum[j] += r;
@@ -295,9 +319,9 @@ std::vector<float> Solver::get_strategy(int legal_actions, int num_combos, const
 
 	const float normalized_strat = 1.0 / legal_actions;
 
-	for (int i = 0; i < legal_actions; i++) {
-		for (int j = 0; j < num_combos; j++) {
-			int regret_i = (num_combos * i) + j;
+	for (std::size_t i = 0; i < legal_actions; i++) {
+		for (std::size_t j = 0; j < num_combos; j++) {
+			auto regret_i = (num_combos * i) + j;
 			float rsum_val = rsum[j];
 			if (rsum_val <= 0)
 				strategy[regret_i] = normalized_strat;

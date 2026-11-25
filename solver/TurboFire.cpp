@@ -42,8 +42,9 @@ int main(int argc, char** argv) {
             if (i == 6)
                 turn = card;
         }
-        auto hero = Hands::parse_range_to_combos(Hands::parse_range(Hands::hero), state.board);
-        auto villain = Hands::parse_range_to_combos(Hands::parse_range(Hands::villain), state.board);
+        auto scenario = std::filesystem::path(TURBOFIRE_RANGE_DIR) / "hu_bb_vs_sb";
+        auto hero = Hands::load_range(scenario / "bb_3bet.csv", state.board);
+        auto villain = Hands::load_range(scenario / "sb_call_3bet.csv", state.board);
         Solver solver(flop, hero, villain, mode == "shared");
         auto values = solver.train(state, turn, iterations);
         double utility = 0;

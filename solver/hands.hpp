@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <iostream>
 #include <iomanip>
 #include <unordered_map>
@@ -15,6 +16,7 @@ class Hands {
 		static const std::unordered_map<std::string, double> hero;
 		static const std::unordered_map<std::string, double> villain;
 
+		static std::vector<float> load_range(const std::filesystem::path& path, std::uint64_t dead_cards = 0);
 		static std::vector<double> parse_range(const std::unordered_map<std::string, double>& range);
 		static std::vector<float> parse_range_to_combos(const std::vector<double>& range, std::uint64_t dead_cards = 0);
 		static std::vector<uint8_t> available_cards(std::uint64_t dead_cards);

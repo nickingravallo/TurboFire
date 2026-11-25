@@ -1,5 +1,6 @@
 #include "hands.hpp"
 #include "solver.hpp"
+#include <numeric>
 #include <stdexcept>
 
 // Facing an all-in on the river leaves exactly two actions at a single node.
@@ -34,7 +35,75 @@ static void check_compact_storage(const std::array<turbofire::Card, 3>& flop, Ga
     check(1);
 }
 
+static void check_scenario_ranges() {
+    const auto scenario = std::filesystem::path(TURBOFIRE_RANGE_DIR) / "hu_bb_vs_sb";
+    const auto bet = Hands::load_range(scenario / "bb_3bet.csv");
+    const auto call = Hands::load_range(scenario / "sb_call_3bet.csv");
+    for (const auto* range : {&bet, &call}) {
+        if (std::abs(std::accumulate(range->begin(), range->end(), 0.0) - 265.2) > 1e-5)
+            throw std::runtime_error("Expected a 20% starting range");
+    }
+    const auto four_bet = Hands::parse_range_to_combos(Hands::parse_range({
+        {"QQ+", 1}, {"AKs", 1}, {"AKo", 1}, {"A5s", 1}, {"A4s", 1}
+    }));
+    const auto dead = Hands::card_bit(12);
+    const auto blocked = Hands::load_range(scenario / "sb_call_3bet.csv", dead);
+    for (int i = 0; i < 1326; ++i) {
+        if (four_bet[i] && call[i])
+            throw std::runtime_error("Four-bet hand in call range");
+        if (blocked[i] != ((Hands::get_mask_for_combo(i) & dead) ? 0 : call[i]))
+            throw std::runtime_error("Loaded range has incorrect blocker weights");
+    }
+}
+
+static void check_betting_config() {
+    BettingConfig config{};
+    config[TURN] = {{}, {1.1, 2, 3, 10}, 3};
+    config[RIVER] = {{1, 0.25, 0.26, 8}, {}, 1};
+    const std::array<turbofire::Card, 3> flop{0, 5, 9};
+    std::vector<float> range(1326, 1);
+    Solver solver(flop, range, range, true, config);
+    GameState state{};
+    state.prev_act = NONE;
+    state.pot = 40;
+    state.p1stack = state.p2stack = 80;
+    auto check = [&](std::vector<int> expected) {
+        std::vector<int> amounts;
+        for (auto action : solver.get_legal_actions(state))
+            if (action.kind == RAISE)
+                amounts.push_back(action.chips);
+        if (amounts != expected)
+            throw std::runtime_error("Incorrect configured bet or raise amounts");
+    };
+    check({20}); // Default flop.
+    state.street = TURN;
+    check({});
+    state.prev_act = RAISE;
+    state.p2commit = state.last_raise = 10;
+    state.raises = 1;
+    check({20, 30, 80}); // Minimum raise and effective-stack limits.
+    state.raises = 3;
+    check({});
+
+    state.street = RIVER;
+    state.prev_act = NONE;
+    state.p2commit = state.last_raise = state.raises = 0;
+    for (int card : {0, 5, 9, 10, 35})
+        state.board |= Hands::card_bit(card);
+    check({10, 40, 80});
+    solver.train(state, 10, 1);
+    if (solver.action_nodes != 8)
+        throw std::runtime_error("Expected three bet branches after either check opportunity");
+    state.p1stack = 5;
+    check({5});
+    solver.train(state, 10, 1);
+    if (solver.action_nodes != 4)
+        throw std::runtime_error("Changed effective stack must rebuild the betting tree");
+}
+
 int main() {
+    check_betting_config();
+    check_scenario_ranges();
     const std::array<turbofire::Card, 3> flop{0, 5, 9};
     GameState state{};
     for (auto card : flop)

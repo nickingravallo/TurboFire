@@ -1,6 +1,8 @@
 #include "hands.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 const std::unordered_map<std::string, double> Hands::hero = {
@@ -24,6 +26,56 @@ const std::unordered_map<char, int> Hands::cards = {
 const std::unordered_map<char, int> Hands::suits = {
 	{'C', 3}, {'D', 2}, {'H', 1}, {'S', 0},
 };
+
+std::vector<float> Hands::load_range(const std::filesystem::path& path, std::uint64_t dead_cards) {
+    std::ifstream file(path);
+    if (!file)
+        throw std::runtime_error("Cannot open range file " + path.string());
+
+    std::unordered_map<std::string, double> weights;
+    std::string line;
+    std::size_t row = 0;
+    bool positive = false;
+    while (std::getline(file, line)) {
+        ++row;
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        auto error = [&](const char* message) {
+            return std::runtime_error(path.string() + ":" + std::to_string(row) + ": " + message);
+        };
+        if (row == 1) {
+            if (line != "hand,weight")
+                throw error("Expected hand,weight header");
+            continue;
+        }
+        if (line.empty())
+            continue;
+        auto comma = line.find(',');
+        if (comma == std::string::npos)
+            throw error("Expected hand,weight");
+        auto hand = line.substr(0, comma);
+        if (hand.size() < 2 || !cards.count(hand[0]) || !cards.count(hand[1]))
+            throw error("Invalid hand class");
+        bool pair = hand.size() == 2 && hand[0] == hand[1];
+        bool nonpair = hand.size() == 3 && cards.at(hand[0]) > cards.at(hand[1])
+                       && (hand[2] == 's' || hand[2] == 'o');
+        if (!pair && !nonpair)
+            throw error("Expected a class such as AA, AKs or AKo");
+        std::istringstream field(line.substr(comma + 1));
+        double weight;
+        if (!(field >> weight) || !(field >> std::ws).eof() ||
+            !std::isfinite(weight) || weight < 0 || weight > 1)
+            throw error("Expected a weight between 0 and 1");
+        if (!weights.emplace(hand, weight).second)
+            throw error("Duplicate hand class");
+        positive |= weight > 0;
+    }
+    if (file.bad())
+        throw std::runtime_error("Cannot read range file " + path.string());
+    if (!positive)
+        throw std::runtime_error("No positive weights in " + path.string());
+    return parse_range_to_combos(parse_range(weights), dead_cards);
+}
 
 std::vector<float> Hands::parse_range_to_combos(const std::vector<double>& range, std::uint64_t dead_cards) {
 	if (range.size() != 169)
